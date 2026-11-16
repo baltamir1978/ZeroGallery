@@ -30,9 +30,10 @@ constexpr std::array<HelpRow, 5> kBrowserRows = {{
     {"HOLD ESC", "Exit"},
 }};
 
-constexpr std::array<HelpRow, 4> kViewerRows = {{
+constexpr std::array<HelpRow, 5> kViewerRows = {{
     {"Z / C", "Previous / next"},
     {"ENTER", "Pause / play video"},
+    {"TURN IT", "Rotates the picture"},
     {"ESC", "Back to the list"},
     {"HOLD ESC", "Exit"},
 }};

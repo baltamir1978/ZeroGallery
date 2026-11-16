@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -68,7 +69,13 @@ void jpeg_silent(j_common_ptr, int) {}
  * Con setjmp no puede haber objetos con destructor entre medias: por eso el vector viene
  * de fuera y aquí sólo hay punteros y enteros.
  */
-bool decode_jpeg(std::FILE* file, std::vector<uint8_t>& pixels, int& width, int& height, int& orientation) {
+bool decode_jpeg(std::FILE* file,
+                 int canvas_width,
+                 int canvas_height,
+                 std::vector<uint8_t>& pixels,
+                 int& width,
+                 int& height,
+                 int& orientation) {
     jpeg_decompress_struct info{};
     JpegError error{};
     info.err = jpeg_std_error(&error.base);
@@ -99,7 +106,7 @@ bool decode_jpeg(std::FILE* file, std::vector<uint8_t>& pixels, int& width, int&
     const bool swap = gallery::orientation_swaps_axes(orientation);
     const int shown_width = swap ? static_cast<int>(info.image_height) : static_cast<int>(info.image_width);
     const int shown_height = swap ? static_cast<int>(info.image_width) : static_cast<int>(info.image_height);
-    const auto fit = gallery::fit_rect(shown_width, shown_height, kCanvasWidth, kCanvasHeight);
+    const auto fit = gallery::fit_rect(shown_width, shown_height, canvas_width, canvas_height);
     const int need_width = swap ? fit.height : fit.width;
     const int need_height = swap ? fit.width : fit.height;
 
@@ -133,22 +140,27 @@ bool decode_jpeg(std::FILE* file, std::vector<uint8_t>& pixels, int& width, int&
     return true;
 }
 
-/** Endereza según EXIF, encaja en la pantalla promediando píxeles y deja el resto en negro. */
+/**
+ * Endereza según EXIF, encaja en el lienzo promediando píxeles y deja el resto en negro.
+ * El lienzo es la pantalla tal como se va a ver: 320×170, o 170×320 con el aparato de lado.
+ */
 void render_to_canvas(const std::vector<uint8_t>& pixels,
                       int width,
                       int height,
                       int orientation,
+                      int canvas_width,
+                      int canvas_height,
                       std::vector<uint16_t>& canvas) {
     canvas.assign(kCanvasPixels, 0);
     const bool swap = gallery::orientation_swaps_axes(orientation);
     const int shown_width = swap ? height : width;
     const int shown_height = swap ? width : height;
-    const auto fit = gallery::fit_rect(shown_width, shown_height, kCanvasWidth, kCanvasHeight);
+    const auto fit = gallery::fit_rect(shown_width, shown_height, canvas_width, canvas_height);
 
     for (int y = 0; y < fit.height; ++y) {
         const int y0 = static_cast<int>(static_cast<long long>(y) * shown_height / fit.height);
         const int y1 = std::max(y0 + 1, static_cast<int>(static_cast<long long>(y + 1) * shown_height / fit.height));
-        auto* out = canvas.data() + static_cast<size_t>(fit.y + y) * kCanvasWidth + fit.x;
+        auto* out = canvas.data() + static_cast<size_t>(fit.y + y) * canvas_width + fit.x;
         for (int x = 0; x < fit.width; ++x) {
             const int x0 = static_cast<int>(static_cast<long long>(x) * shown_width / fit.width);
             const int x1 = std::max(x0 + 1, static_cast<int>(static_cast<long long>(x + 1) * shown_width / fit.width));
@@ -175,7 +187,7 @@ void render_to_canvas(const std::vector<uint8_t>& pixels,
     }
 }
 
-bool load_jpeg(const std::string& path, std::vector<uint16_t>& canvas) {
+bool load_jpeg(const std::string& path, int canvas_width, int canvas_height, std::vector<uint16_t>& canvas) {
     std::FILE* file = std::fopen(path.c_str(), "rb");
     if (!file) {
         return false;
@@ -184,10 +196,10 @@ bool load_jpeg(const std::string& path, std::vector<uint16_t>& canvas) {
     int width = 0;
     int height = 0;
     int orientation = 1;
-    const bool ok = decode_jpeg(file, pixels, width, height, orientation);
+    const bool ok = decode_jpeg(file, canvas_width, canvas_height, pixels, width, height, orientation);
     std::fclose(file);
     if (ok) {
-        render_to_canvas(pixels, width, height, orientation, canvas);
+        render_to_canvas(pixels, width, height, orientation, canvas_width, canvas_height, canvas);
     }
     return ok;
 }
@@ -317,7 +329,22 @@ private:
     int exit_code_{-1};
 };
 
-std::string canvas_filter(bool video) {
+/** Ancho del lienzo tal como se va a ver: con el aparato de lado, el alto de la pantalla. */
+int upright_width(int turns) {
+    return gallery::rotation_swaps_axes(turns) ? kCanvasHeight : kCanvasWidth;
+}
+
+int upright_height(int turns) {
+    return gallery::rotation_swaps_axes(turns) ? kCanvasWidth : kCanvasHeight;
+}
+
+/**
+ * ffmpeg encaja en el lienzo tal como se va a ver y el giro a la pantalla se hace aquí
+ * (`to_canvas`): son 54 400 píxeles por fotograma y así fotos y vídeos giran igual.
+ */
+std::string canvas_filter(bool video, int turns) {
+    const int width = upright_width(turns);
+    const int height = upright_height(turns);
     char filter[256];
     std::snprintf(filter,
                   sizeof(filter),
@@ -325,19 +352,28 @@ std::string canvas_filter(bool video) {
                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black",
                   video ? "fps=" : "",
                   video ? (std::to_string(kVideoFps) + ",").c_str() : "",
-                  kCanvasWidth,
-                  kCanvasHeight,
+                  width,
+                  height,
                   video ? "fast_bilinear" : "area",
-                  kCanvasWidth,
-                  kCanvasHeight);
+                  width,
+                  height);
     return filter;
 }
 
-std::vector<std::string> still_arguments(const std::string& path) {
+std::vector<std::string> still_arguments(const std::string& path, int turns) {
     // Sin -map: en un HEIC de móvil la imagen es una rejilla de teselas y ffmpeg sólo la
     // recompone si se le deja elegir a él.
     return {"-nostdin", "-hide_banner", "-loglevel", "error", "-i", path, "-frames:v", "1",
-            "-vf", canvas_filter(false), "-pix_fmt", "rgb565le", "-f", "rawvideo", "pipe:1"};
+            "-vf", canvas_filter(false, turns), "-pix_fmt", "rgb565le", "-f", "rawvideo", "pipe:1"};
+}
+
+/** Un solo fotograma de un vídeo, sin sonido. */
+std::vector<std::string> video_frame_arguments(const std::string& path, double seconds, int turns) {
+    char position[32];
+    std::snprintf(position, sizeof(position), "%.3f", seconds);
+    return {"-nostdin", "-hide_banner", "-loglevel", "error", "-skip_loop_filter", "all", "-ss", position,
+            "-i", path, "-an", "-frames:v", "1", "-vf", canvas_filter(false, turns), "-pix_fmt", "rgb565le",
+            "-f", "rawvideo", "pipe:1"};
 }
 
 /**
@@ -347,7 +383,8 @@ std::vector<std::string> still_arguments(const std::string& path) {
 std::vector<std::string> video_arguments(const std::string& path,
                                          double position,
                                          const std::string& audio,
-                                         bool loop) {
+                                         bool loop,
+                                         int turns) {
     std::vector<std::string> arguments = {"-nostdin", "-hide_banner", "-loglevel", "error",
                                           // A 320×170 no se nota y ahorra un buen pico de CPU en H.264.
                                           "-skip_loop_filter", "all",
@@ -361,7 +398,7 @@ std::vector<std::string> video_arguments(const std::string& path,
         std::snprintf(seconds, sizeof(seconds), "%.3f", position);
         arguments.insert(arguments.end(), {"-ss", seconds});
     }
-    arguments.insert(arguments.end(), {"-i", path, "-an", "-vf", canvas_filter(true), "-pix_fmt", "rgb565le",
+    arguments.insert(arguments.end(), {"-i", path, "-an", "-vf", canvas_filter(true, turns), "-pix_fmt", "rgb565le",
                                        "-f", "rawvideo", "pipe:1"});
     if (!audio.empty()) {
         // Segunda salida del mismo proceso: al salir las dos del mismo reloj, imagen y
@@ -374,9 +411,14 @@ std::vector<std::string> video_arguments(const std::string& path,
     return arguments;
 }
 
-void to_canvas(const std::vector<uint8_t>& bytes, std::vector<uint16_t>& canvas) {
+/** Del lienzo tal como se va a ver a la pantalla tal como está montada. */
+void to_canvas(const std::vector<uint16_t>& upright, int turns, std::vector<uint16_t>& canvas) {
     canvas.resize(kCanvasPixels);
-    std::memcpy(canvas.data(), bytes.data(), kFrameBytes);
+    gallery::rotate_to_screen(upright.data(), turns, kCanvasWidth, kCanvasHeight, canvas.data());
+}
+
+uint8_t* bytes_of(std::vector<uint16_t>& pixels) {
+    return reinterpret_cast<uint8_t*>(pixels.data());
 }
 
 } // namespace
@@ -426,6 +468,14 @@ void MediaPlayer::toggle_pause() {
     wake_.notify_all();
 }
 
+void MediaPlayer::set_rotation(int turns) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rotation_ = ((turns % 4) + 4) % 4;
+    }
+    wake_.notify_all();
+}
+
 bool MediaPlayer::take_frame(uint16_t* destination) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!frame_fresh_) {
@@ -469,34 +519,50 @@ void MediaPlayer::fail(uint64_t generation, const std::string& message) {
     state_ = MediaState::Error;
 }
 
-bool MediaPlayer::wait_for_toggle(uint64_t generation, uint64_t& toggles_seen) {
+MediaPlayer::Event MediaPlayer::wait_for_event(uint64_t generation, uint64_t& toggles_seen, int& turns) {
     std::unique_lock<std::mutex> lock(mutex_);
-    wake_.wait(lock, [&] { return request_.generation != generation || toggles_ != toggles_seen; });
+    wake_.wait(lock, [&] {
+        return request_.generation != generation || toggles_ != toggles_seen || rotation_ != turns;
+    });
     if (request_.generation != generation) {
-        return false;
+        return Event::Superseded;
     }
-    toggles_seen = toggles_;
-    return true;
+    if (toggles_ != toggles_seen) {
+        toggles_seen = toggles_;
+        return Event::Toggled;
+    }
+    turns = rotation_;
+    return Event::Rotated;
 }
 
 void MediaPlayer::run() {
     uint64_t handled = 0;
+    Request request;
+    // Giro con que se pintó la foto que hay en pantalla; -1 si lo que hay no es una foto
+    // (el vídeo se ocupa él de su giro mientras dura).
+    int still_turns = -1;
     for (;;) {
-        Request request;
+        int turns = 0;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            wake_.wait(lock, [&] { return quit_ || request_.generation != handled; });
+            wake_.wait(lock, [&] {
+                return quit_ || request_.generation != handled || (still_turns >= 0 && rotation_ != still_turns);
+            });
             if (quit_) {
                 return;
             }
+            // Si no ha cambiado lo pedido es que se ha girado el aparato: la misma foto otra vez.
             request = request_;
             handled = request.generation;
+            turns = rotation_;
         }
+        still_turns = -1;
         if (request.path.empty()) {
             continue;
         }
         if (request.kind == MediaKind::Still) {
-            show_still(request);
+            show_still(request, turns);
+            still_turns = turns;
         }
         else {
             play_video(request);
@@ -504,42 +570,70 @@ void MediaPlayer::run() {
     }
 }
 
-void MediaPlayer::show_still(const Request& request) {
+/**
+ * Lee de ffmpeg un fotograma entero. `false` si no llega (ffmpeg acaba antes, tarda más de
+ * medio minuto) o si mientras tanto se pide otra cosa.
+ */
+static bool read_frame(Ffmpeg& ffmpeg, std::vector<uint16_t>& upright, size_t& filled, const std::function<bool()>& abandoned) {
+    upright.resize(kCanvasPixels);
+    filled = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (filled < kFrameBytes) {
+        if (abandoned() || std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        const long count = ffmpeg.read_some(bytes_of(upright) + filled, kFrameBytes - filled, 100);
+        if (count < 0) {
+            return false;
+        }
+        filled += static_cast<size_t>(count);
+    }
+    return true;
+}
+
+void MediaPlayer::show_still(const Request& request, int turns) {
+    std::vector<uint16_t> upright;
     std::vector<uint16_t> canvas;
-    if (gallery::is_jpeg(request.path) && load_jpeg(request.path, canvas)) {
+    if (gallery::is_jpeg(request.path) &&
+        load_jpeg(request.path, upright_width(turns), upright_height(turns), upright)) {
+        to_canvas(upright, turns, canvas);
         publish(canvas, request.generation, MediaState::Still);
         return;
     }
 
     // Lo que libjpeg no abre (otros formatos, o un JPEG en CMYK) se le deja a ffmpeg.
     Ffmpeg ffmpeg;
-    if (!ffmpeg.start(still_arguments(request.path))) {
+    if (!ffmpeg.start(still_arguments(request.path, turns))) {
         fail(request.generation, "Cannot run ffmpeg");
         return;
     }
-    std::vector<uint8_t> bytes(kFrameBytes);
     size_t filled = 0;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (filled < kFrameBytes) {
+    if (!read_frame(ffmpeg, upright, filled, [&] { return superseded(request.generation); })) {
         if (superseded(request.generation)) {
             return;
         }
-        if (std::chrono::steady_clock::now() > deadline) {
-            break;
-        }
-        const long count = ffmpeg.read_some(bytes.data() + filled, kFrameBytes - filled, 100);
-        if (count < 0) {
-            break;
-        }
-        filled += static_cast<size_t>(count);
-    }
-    if (filled < kFrameBytes) {
         const bool missing = filled == 0 && ffmpeg.finish() == kExitExecFailed;
         fail(request.generation, missing ? "ffmpeg is not installed" : "Cannot open this image");
         return;
     }
-    to_canvas(bytes, canvas);
+    to_canvas(upright, turns, canvas);
     publish(canvas, request.generation, MediaState::Still);
+}
+
+bool MediaPlayer::show_video_frame(const Request& request, double seconds, int turns, MediaState state) {
+    Ffmpeg ffmpeg;
+    if (!ffmpeg.start(video_frame_arguments(request.path, seconds, turns))) {
+        return false;
+    }
+    std::vector<uint16_t> upright;
+    size_t filled = 0;
+    if (!read_frame(ffmpeg, upright, filled, [&] { return superseded(request.generation); })) {
+        return false;
+    }
+    std::vector<uint16_t> canvas;
+    to_canvas(upright, turns, canvas);
+    publish(canvas, request.generation, state);
+    return true;
 }
 
 /** Hay alguna tarjeta de sonido. Sin ninguna, ni se intenta sacar audio por ALSA. */
@@ -591,21 +685,48 @@ void MediaPlayer::play_video(const Request& request) {
     std::string audio = loop ? std::string{} : audio_output();
 
     uint64_t toggles_seen = 0;
+    int turns = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         toggles_seen = toggles_;
+        turns = rotation_;
     }
 
     double position = 0.0;
-    std::vector<uint8_t> bytes(kFrameBytes);
+    std::vector<uint16_t> upright(kCanvasPixels);
     std::vector<uint16_t> canvas;
 
+    // Parado (en pausa o acabado) se espera aquí. Si mientras se gira el aparato, se pide
+    // a ffmpeg el fotograma en que se quedó, ya girado; `false` es que se ha pedido otra cosa.
+    const auto wait_stopped = [&](MediaState state, double shown_at) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (request_.generation == request.generation) {
+                state_ = state;
+            }
+        }
+        for (;;) {
+            const Event event = wait_for_event(request.generation, toggles_seen, turns);
+            if (event == Event::Superseded) {
+                return false;
+            }
+            if (event == Event::Toggled) {
+                return true;
+            }
+            // Justo al final puede no quedar fotograma que sacar: se prueba un poco antes.
+            if (!show_video_frame(request, shown_at, turns, state)) {
+                show_video_frame(request, std::max(0.0, shown_at - 1.0), turns, state);
+            }
+        }
+    };
+
     // Cada vuelta es un ffmpeg: al empezar, al reanudar tras una pausa (desde donde se
-    // quedó) y al repetir. Pausar es parar el proceso: con -re, congelarlo y soltarlo
-    // después lo haría correr para recuperar el tiempo perdido.
+    // quedó), al girar el aparato y al repetir. Pausar es parar el proceso: con -re,
+    // congelarlo y soltarlo después lo haría correr para recuperar el tiempo perdido. Y el
+    // giro cambia el tamaño al que ffmpeg encaja la imagen, que va en sus argumentos.
     for (;;) {
         Ffmpeg ffmpeg;
-        if (!ffmpeg.start(video_arguments(request.path, position, audio, loop))) {
+        if (!ffmpeg.start(video_arguments(request.path, position, audio, loop, turns))) {
             fail(request.generation, "Cannot run ffmpeg");
             return;
         }
@@ -613,6 +734,7 @@ void MediaPlayer::play_video(const Request& request) {
         size_t filled = 0;
         long frames = 0;
         bool paused = false;
+        bool rotated = false;
         for (;;) {
             if (superseded(request.generation)) {
                 return;
@@ -623,11 +745,15 @@ void MediaPlayer::play_video(const Request& request) {
                     toggles_seen = toggles_;
                     paused = true;
                 }
+                if (rotation_ != turns) {
+                    turns = rotation_;
+                    rotated = true;
+                }
             }
-            if (paused) {
+            if (paused || rotated) {
                 break;
             }
-            const long count = ffmpeg.read_some(bytes.data() + filled, kFrameBytes - filled, 100);
+            const long count = ffmpeg.read_some(bytes_of(upright) + filled, kFrameBytes - filled, 100);
             if (count < 0) {
                 break;
             }
@@ -635,7 +761,7 @@ void MediaPlayer::play_video(const Request& request) {
             if (filled == kFrameBytes) {
                 filled = 0;
                 ++frames;
-                to_canvas(bytes, canvas);
+                to_canvas(upright, turns, canvas);
                 publish(canvas, request.generation, MediaState::Playing);
             }
         }
@@ -645,15 +771,17 @@ void MediaPlayer::play_video(const Request& request) {
 
         if (paused) {
             ffmpeg.stop();
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (request_.generation == request.generation) {
-                    state_ = MediaState::Paused;
-                }
+            if (rotated) {
+                // Pausa y giro a la vez: el fotograma que queda en pantalla, ya girado.
+                show_video_frame(request, position, turns, MediaState::Paused);
             }
-            if (!wait_for_toggle(request.generation, toggles_seen)) {
+            if (!wait_stopped(MediaState::Paused, position)) {
                 return;
             }
+            continue;
+        }
+        if (rotated) {
+            ffmpeg.stop();
             continue;
         }
 
@@ -674,13 +802,8 @@ void MediaPlayer::play_video(const Request& request) {
             return;
         }
 
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (request_.generation == request.generation) {
-                state_ = MediaState::Ended;
-            }
-        }
-        if (!wait_for_toggle(request.generation, toggles_seen)) {
+        // El último fotograma que se vio es el anterior a donde se quedó la cuenta.
+        if (!wait_stopped(MediaState::Ended, std::max(0.0, position - 1.0 / kVideoFps))) {
             return;
         }
         position = 0.0;

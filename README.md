@@ -25,6 +25,10 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
 - **Vídeos** con `ffmpeg`: MP4, MOV, MKV, WebM, AVI, MPEG, TS/MTS, WMV, FLV, OGV, 3GP… con
   cualquier códec que traiga el ffmpeg de Debian (H.264, HEVC, VP9, AV1, MPEG-2/4, Theora…).
   Se ven a 15 fotogramas por segundo, ajustados a la pantalla de 320×170.
+- **Gira con el aparato**: en el visor, al poner el Cardputer de lado o boca abajo la foto o
+  el vídeo se dan la vuelta para seguir viéndose derechos (lo dice el acelerómetro), y de lado
+  se encajan en 170×320, que es como mejor se ven las fotos y los vídeos verticales. Tumbado
+  en la mesa se queda como estaba. La lista de carpetas no gira.
 - **Sonido** por PipeWire (el servidor de sonido del aparato): suena por donde esté saliendo
   el sonido del sistema —altavoz, auriculares o Bluetooth— y con su volumen. Si un vídeo no
   tiene sonido o no hay salida, se reproduce sólo la imagen.
@@ -38,6 +42,7 @@ Las flechas del Cardputer Zero están en `F`, `Z`, `X` y `C`: valen **con o sin 
 | `F` / `X` (↑ ↓) | Subir y bajar (dejándola pulsada, corre) | Anterior / siguiente |
 | `Z` / `C` (← →) | Carpeta de arriba / abrir | Anterior / siguiente |
 | `Enter` o espacio | Abrir carpeta, foto o vídeo | Pausar o reanudar el vídeo; repetirlo si acabó |
+| Girar el aparato | — | Gira la foto o el vídeo |
 | `Esc` | Carpeta de arriba | Volver a la lista |
 | `Esc` **mantenido** | Salir de la app | Salir de la app |
 | `T` | Tema claro / oscuro (se recuerda) | Lo mismo |
@@ -59,8 +64,9 @@ ssh pi@<ip-del-cardputer> 'sudo apt install ./ZeroGallery_*_arm64.deb'
 
 ## Compilar
 
-Sólo hace falta Docker; `Tools/compilar.sh` monta el entorno (Debian 13 con CMake, SDL2 y el
-compilador cruzado) la primera vez.
+Con Docker no hace falta nada más: `Tools/compilar.sh` monta el entorno (Debian 13 con CMake,
+SDL2 y el compilador cruzado) la primera vez. Sin Docker, el mismo script usa las herramientas
+de la máquina si están instaladas (los paquetes de `Tools/Dockerfile`).
 
 ```sh
 Tools/compilar.sh pruebas     # simulador de escritorio + pruebas de la lógica
@@ -101,8 +107,12 @@ tests/gallery_test.cpp       pruebas de src/model
 y salida con `Esc`. Las órdenes de `ffmpeg` que usa la app se han comprobado con 23 formatos de
 imagen y 11 combinaciones de contenedor y códec de vídeo.
 
-**Sin probar en el aparato.** Quedan por confirmar ahí el sonido (en el simulador no había
-salida de audio) y la fluidez con vídeos de alta resolución, que la CM0 decodifica por software.
+**0.2.0 (16-nov-2026)** — fotos y vídeos giran con el aparato. Probado en el simulador con un
+acelerómetro de mentira en las cuatro posiciones (foto, vídeo en marcha y en pausa) y
+comprobado en el aparato.
+
+Quedan por confirmar en el aparato el sonido (en el simulador no había salida de audio) y la
+fluidez con vídeos de alta resolución, que la CM0 decodifica por software.
 
 ## Licencia
 

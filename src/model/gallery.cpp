@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <system_error>
 
 namespace gallery {
@@ -333,6 +334,82 @@ void oriented_to_stored(int orientation, int width, int height, int x, int y, in
         default:
             stored_x = x;
             stored_y = y;
+            break;
+    }
+}
+
+int rotation_from_gravity(double sensor_x, double sensor_y, double sensor_z, int current) {
+    // Ejes de la pantalla a partir de los del sensor, como los da la app oficial Compass
+    // (`mapBmi270ToScreen`): derecha = Y del sensor, arriba = -X. Parado, el acelerómetro
+    // marca hacia arriba (la fuerza que lo sostiene), así que (right, top) dice hacia qué
+    // borde de la pantalla queda el techo.
+    const double right = sensor_y;
+    const double top = -sensor_x;
+    const double in_plane = std::hypot(right, top);
+    const double total = std::hypot(in_plane, sensor_z);
+    // Menos de unos 25° levantado de la mesa: no hay un «arriba» del que fiarse.
+    constexpr double kMinimumInPlane = 0.42;
+    if (!(total > 0.0) || in_plane < kMinimumInPlane * total) {
+        return current;
+    }
+
+    // Grados desde el borde de arriba de la pantalla hasta el techo, en el sentido del reloj.
+    constexpr double kDegreesPerRadian = 57.29577951308232;
+    const double angle = std::atan2(right, top) * kDegreesPerRadian;
+    double from_current = std::fmod(angle - current * 90.0, 360.0);
+    if (from_current > 180.0) {
+        from_current -= 360.0;
+    }
+    else if (from_current < -180.0) {
+        from_current += 360.0;
+    }
+    // El cambio justo sería a los 45°; se piden 60° para que cerca de la diagonal no vaya
+    // y venga con el pulso.
+    constexpr double kSwitchDegrees = 60.0;
+    if (std::fabs(from_current) <= kSwitchDegrees) {
+        return current;
+    }
+    const int turns = static_cast<int>(std::lround(angle / 90.0));
+    return ((turns % 4) + 4) % 4;
+}
+
+bool rotation_swaps_axes(int turns) {
+    return (turns & 1) != 0;
+}
+
+void rotate_to_screen(const uint16_t* upright, int turns, int screen_width, int screen_height, uint16_t* screen) {
+    const size_t pixels = static_cast<size_t>(screen_width) * screen_height;
+    switch (((turns % 4) + 4) % 4) {
+        case 1: {
+            // La imagen mide screen_height de ancho: su borde de arriba va al borde derecho.
+            const int width = screen_height;
+            const int height = screen_width;
+            for (int y = 0; y < screen_height; ++y) {
+                auto* out = screen + static_cast<size_t>(y) * screen_width;
+                for (int x = 0; x < screen_width; ++x) {
+                    out[x] = upright[static_cast<size_t>(height - 1 - x) * width + y];
+                }
+            }
+            break;
+        }
+        case 2:
+            for (size_t i = 0; i < pixels; ++i) {
+                screen[i] = upright[pixels - 1 - i];
+            }
+            break;
+        case 3: {
+            // Su borde de arriba va al borde izquierdo.
+            const int width = screen_height;
+            for (int y = 0; y < screen_height; ++y) {
+                auto* out = screen + static_cast<size_t>(y) * screen_width;
+                for (int x = 0; x < screen_width; ++x) {
+                    out[x] = upright[static_cast<size_t>(x) * width + (width - 1 - y)];
+                }
+            }
+            break;
+        }
+        default:
+            std::copy(upright, upright + pixels, screen);
             break;
     }
 }

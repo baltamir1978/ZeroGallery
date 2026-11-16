@@ -11,7 +11,8 @@ y GrapheneOS no aplica.
 
 ## Compilar y comprobar
 
-En esta máquina no hay CMake ni compilador cruzado ni sudo: todo va en Docker.
+`Tools/compilar.sh` usa Docker si lo hay (así se hizo en el servidor, que no tiene CMake ni
+compilador cruzado) y, si no, las herramientas de la máquina: los paquetes de `Tools/Dockerfile`.
 
 ```sh
 Tools/compilar.sh pruebas   # simulador (SDL2) + ctest; tiene que pasar
@@ -26,8 +27,10 @@ Tools/compilar.sh deb       # dist/ZeroGallery_<versión>_rev1_arm64.deb
   La app también guarda capturas exactas de 320×170 con `Print` en `~/Pictures/Screenshots`
   (de ahí salen las de `screenshot/`). En Docker no hay tarjeta de sonido, así que el audio
   no se puede probar aquí.
-- Aparato aquí no hay: lo que no se ha probado en él se dice («sin probar en el aparato») en
-  el «Estado» y se quita cuando Bruno lo confirma.
+- **El aparato** es `cpzero` en la red de Tailscale (`ssh cpzero`, usuario `bruno`, con
+  `sudo` sin contraseña): el `.deb` se copia y se instala con `sudo apt-get install -y`. Lo
+  que haya que mirar en la pantalla lo confirma Bruno: hasta entonces se dice («sin probar en
+  el aparato») en el «Estado».
 
 ## De dónde viene
 
@@ -61,6 +64,18 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   ffmpeg falla con sonido, se repite sin él. `ZEROGALLERY_AUDIO=none|pulse|alsa` lo fuerza.
 - **Pausar es matar ffmpeg** y relanzarlo con `-ss`: con `-re`, congelar el proceso lo haría
   correr al soltarlo.
+- **El giro lo decide `gallery::rotation_from_gravity`** con el acelerómetro (BMI270 por IIO,
+  `/sys/bus/iio/devices/*/in_accel_*_raw`, legible sin permisos especiales). Los ejes son los
+  de la app oficial `CardputerZero/Compass` (`mapBmi270ToScreen`): de pie como se usa, el
+  sensor marca `-X`. Cambia al pasar 60° (no 45°) y tras dos lecturas iguales, para que no
+  baile; tumbado no cambia. Sólo se lee con el visor abierto (`platform::OrientationSensor`).
+- **Girado de lado, la imagen se compone en 170×320** (libjpeg o ffmpeg encajan ahí) y se
+  gira a la pantalla en `gallery::rotate_to_screen`. Un vídeo en marcha **relanza ffmpeg
+  desde donde iba** (el tamaño va en sus argumentos), con un corte breve de sonido; en pausa
+  o acabado se pide un fotograma suelto. Los rótulos giran con `transform_rotation` de LVGL.
+- **Probar el giro sin aparato**: `ZEROGALLERY_IIO=<carpeta>` con un `iio:device1/` dentro y
+  los tres `in_accel_?_raw` como ficheros corrientes (se reescriben con el simulador en
+  marcha); `ZEROGALLERY_ROTATE=0..3` lo fija sin sensor.
 - **La interfaz está en inglés**, como las demás apps del aparato.
 - El visor no tiene estado propio: pasar de foto mueve la selección de `gallery::Session`.
 
@@ -76,6 +91,8 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.2.0 (16-nov-2026)**: fotos y vídeos giran con el aparato (acelerómetro). Probado en el
+  simulador con un acelerómetro de mentira y **en el aparato: Bruno confirma que funciona**.
 - **0.1.0 (16-nov-2026)**: primera versión. Lista de carpetas, visor de fotos y vídeos, GIF
   animados, tema claro/oscuro. Probada en el simulador; **sin probar en el aparato** (sonido,
   fluidez de vídeo en la CM0, que el teclado real mande las teclas esperadas).

@@ -19,13 +19,19 @@ constexpr uint32_t kPollPeriodMs = 15;
 constexpr uint32_t kCaptionMs = 2500;
 // «Loading» sólo si tarda: en las fotos que abren al momento sería un parpadeo.
 constexpr uint32_t kLoadingNoticeMs = 350;
+// Separación del rótulo con el nombre a los bordes.
+constexpr int32_t kCaptionMargin = 4;
 
 } // namespace
 
 ViewerScreen::ViewerScreen(viewmodel::BaseViewModel& view_model, app::AssetManager& assets)
     : BaseScreen(view_model, assets),
       player_(std::make_unique<platform::MediaPlayer>()),
+      orientation_(std::make_unique<platform::OrientationSensor>()),
+      turns_(orientation_->turns()),
       canvas_(platform::kCanvasPixels, 0) {
+    // Antes de cargar nada: que la primera foto ya salga para como está el aparato.
+    player_->set_rotation(turns_);
     init(true);
 }
 
@@ -34,6 +40,7 @@ ViewerScreen::~ViewerScreen() {
         lv_timer_delete(poll_timer_);
         poll_timer_ = nullptr;
     }
+    orientation_.reset();
     // Antes de que se borren los objetos: para ffmpeg y con él el sonido.
     player_.reset();
 }
@@ -41,6 +48,9 @@ ViewerScreen::~ViewerScreen() {
 void ViewerScreen::build_content(lv_obj_t* content) {
     lv_obj_set_style_bg_color(content, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(content, LV_OPA_COVER, 0);
+    // Un rótulo girado asoma su caja sin girar por fuera de la pantalla: que no cuente
+    // como contenido por el que desplazarse.
+    lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
 
     canvas_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
     canvas_dsc_.header.cf = LV_COLOR_FORMAT_RGB565;
@@ -68,14 +78,15 @@ void ViewerScreen::build_content(lv_obj_t* content) {
     lv_obj_set_style_pad_hor(caption_, 6, 0);
     lv_obj_set_style_pad_ver(caption_, 2, 0);
     lv_label_set_long_mode(caption_, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_max_width(caption_, view::kScreenWidth - 8, 0);
     lv_obj_set_height(caption_, lv_font_get_line_height(text_font) + 4);
-    lv_obj_align(caption_, LV_ALIGN_TOP_LEFT, 4, 4);
+    lv_obj_set_style_transform_pivot_x(caption_, lv_pct(50), 0);
+    lv_obj_set_style_transform_pivot_y(caption_, lv_pct(50), 0);
 
     status_box_ = lv_obj_create(content);
     lv_obj_remove_style_all(status_box_);
     lv_obj_set_size(status_box_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_max_width(status_box_, view::kScreenWidth - 24, 0);
+    lv_obj_set_style_transform_pivot_x(status_box_, lv_pct(50), 0);
+    lv_obj_set_style_transform_pivot_y(status_box_, lv_pct(50), 0);
     lv_obj_set_style_bg_color(status_box_, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(status_box_, LV_OPA_60, 0);
     lv_obj_set_style_radius(status_box_, 8, 0);
@@ -85,7 +96,6 @@ void ViewerScreen::build_content(lv_obj_t* content) {
     lv_obj_set_flex_flow(status_box_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(status_box_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(status_box_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_center(status_box_);
 
     const lv_font_t* icon_font = assets().load_font("Phosphor-Fill.ttf", 30);
     status_icon_ = lv_label_create(status_box_);
@@ -133,9 +143,54 @@ void ViewerScreen::load_selected() {
     lv_label_set_text(caption_, caption.c_str());
     lv_obj_remove_flag(caption_, LV_OBJ_FLAG_HIDDEN);
     caption_since_ = lv_tick_get();
+    place_overlays();
+}
+
+void ViewerScreen::place_overlays() {
+    // Ancho de la pantalla tal como se ve ahora: de lado, los 170 del alto.
+    const bool sideways = gallery::rotation_swaps_axes(turns_);
+    const int32_t seen_width = sideways ? view::kScreenHeight : view::kScreenWidth;
+    const int32_t rotation = turns_ * 900; // décimas de grado
+
+    lv_obj_set_style_max_width(status_box_, seen_width - 24, 0);
+    lv_obj_set_style_transform_rotation(status_box_, rotation, 0);
+    lv_obj_center(status_box_);
+
+    // El rótulo va arriba a la izquierda de lo que se ve. LVGL gira cada objeto sobre su
+    // centro sin moverlo, así que se calcula dónde cae ese centro en la pantalla real.
+    lv_obj_set_style_max_width(caption_, seen_width - 2 * kCaptionMargin, 0);
+    lv_obj_set_style_transform_rotation(caption_, rotation, 0);
+    lv_obj_update_layout(caption_);
+    const int32_t along = kCaptionMargin + lv_obj_get_width(caption_) / 2;  // desde la izquierda de lo que se ve
+    const int32_t down = kCaptionMargin + lv_obj_get_height(caption_) / 2;  // desde arriba de lo que se ve
+    int32_t x = along;
+    int32_t y = down;
+    switch (turns_) {
+        case 1: // arriba es el borde derecho de la pantalla
+            x = view::kScreenWidth - down;
+            y = along;
+            break;
+        case 2:
+            x = view::kScreenWidth - along;
+            y = view::kScreenHeight - down;
+            break;
+        case 3: // arriba es el borde izquierdo
+            x = down;
+            y = view::kScreenHeight - along;
+            break;
+        default:
+            break;
+    }
+    lv_obj_align(caption_, LV_ALIGN_CENTER, x - view::kScreenWidth / 2, y - view::kScreenHeight / 2);
 }
 
 void ViewerScreen::poll() {
+    if (const int turns = orientation_->turns(); turns != turns_) {
+        turns_ = turns;
+        player_->set_rotation(turns_);
+        place_overlays();
+    }
+
     if (player_->take_frame(canvas_.data())) {
         lv_obj_invalidate(image_);
     }

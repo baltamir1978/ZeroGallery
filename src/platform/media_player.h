@@ -64,6 +64,14 @@ public:
      */
     void toggle_pause();
 
+    /**
+     * Cuartos de vuelta (0 a 3, en el sentido del reloj) con que se pinta, para que se vea
+     * derecho con el aparato girado. Con 1 y 3 la imagen se encaja en 170×320. Lo que haya
+     * en pantalla se vuelve a componer: una foto se abre otra vez y un vídeo sigue desde
+     * donde iba.
+     */
+    void set_rotation(int turns);
+
     /** Copia el último fotograma en `destination` (kCanvasPixels) si hay uno nuevo. */
     bool take_frame(uint16_t* destination);
 
@@ -78,19 +86,28 @@ private:
     };
 
     void run();
-    void show_still(const Request& request);
+    enum class Event {
+        Superseded, // se ha pedido otra cosa
+        Toggled,    // pausa
+        Rotated,    // se ha girado el aparato
+    };
+
+    void show_still(const Request& request, int turns);
     void play_video(const Request& request);
     bool superseded(uint64_t generation);
     void publish(const std::vector<uint16_t>& frame, uint64_t generation, MediaState state);
     void fail(uint64_t generation, const std::string& message);
-    /** Espera a que se pulse pausa (`true`) o a que se pida otra cosa (`false`). */
-    bool wait_for_toggle(uint64_t generation, uint64_t& toggles_seen);
+    /** Espera con el vídeo parado a que pase algo; deja al día `toggles_seen` y `turns`. */
+    Event wait_for_event(uint64_t generation, uint64_t& toggles_seen, int& turns);
+    /** Fotograma suelto del vídeo en `seconds`, para volver a pintarlo girado estando parado. */
+    bool show_video_frame(const Request& request, double seconds, int turns, MediaState state);
 
     mutable std::mutex mutex_;
     std::condition_variable wake_;
     Request request_;
     bool quit_{false};
     uint64_t toggles_{0};
+    int rotation_{0};
     std::vector<uint16_t> frame_;
     bool frame_fresh_{false};
     std::string error_;

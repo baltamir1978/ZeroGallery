@@ -209,6 +209,80 @@ void test_orientation_mapping() {
     CHECK(sx == width - 1 && sy == height - 1);
 }
 
+void test_rotation_from_gravity() {
+    // Lecturas reales del BMI270 del aparato (en crudo): de pie, como se usa, marca -X.
+    CHECK(gallery::rotation_from_gravity(-3792, 1432, 52, 0) == 0);
+    CHECK(gallery::rotation_from_gravity(-4096, 0, 0, 2) == 0);
+    // Lado derecho hacia arriba, boca abajo y lado izquierdo hacia arriba.
+    CHECK(gallery::rotation_from_gravity(0, 4096, 0, 0) == 1);
+    CHECK(gallery::rotation_from_gravity(4096, 0, 0, 0) == 2);
+    CHECK(gallery::rotation_from_gravity(0, -4096, 0, 0) == 3);
+    // Tumbado en la mesa no se sabe: se queda como estaba.
+    CHECK(gallery::rotation_from_gravity(-300, 200, 4096, 3) == 3);
+    CHECK(gallery::rotation_from_gravity(0, 0, 0, 1) == 1);
+    // En la diagonal (45°) no cambia; hay que pasar de 60°, desde cualquiera de los dos lados.
+    CHECK(gallery::rotation_from_gravity(-2896, 2896, 0, 0) == 0);
+    CHECK(gallery::rotation_from_gravity(-2896, 2896, 0, 1) == 1);
+    CHECK(gallery::rotation_from_gravity(-1401, 3849, 0, 0) == 1); // 70°
+    CHECK(gallery::rotation_from_gravity(-3849, 1401, 0, 1) == 0); // 20°
+    // De 3 a 0 pasando por el salto de -180°/180° del ángulo.
+    CHECK(gallery::rotation_from_gravity(3849, -1401, 0, 3) == 2);
+    CHECK(gallery::rotation_from_gravity(3849, 1401, 0, 3) == 2);
+}
+
+void test_rotate_to_screen() {
+    const int width = 4;
+    const int height = 3;
+    CHECK(!gallery::rotation_swaps_axes(0) && gallery::rotation_swaps_axes(1));
+    CHECK(!gallery::rotation_swaps_axes(2) && gallery::rotation_swaps_axes(3));
+
+    for (int turns = 0; turns < 4; ++turns) {
+        const bool swap = gallery::rotation_swaps_axes(turns);
+        const int upright_width = swap ? height : width;
+        const int upright_height = swap ? width : height;
+        std::vector<uint16_t> upright(static_cast<size_t>(width * height));
+        for (size_t i = 0; i < upright.size(); ++i) {
+            upright[i] = static_cast<uint16_t>(i + 1);
+        }
+        std::vector<uint16_t> screen(upright.size(), 0);
+        gallery::rotate_to_screen(upright.data(), turns, width, height, screen.data());
+
+        const auto at = [&](int x, int y) { return screen[static_cast<size_t>(y * width + x)]; };
+        const uint16_t top_left = upright[0];
+        const uint16_t top_right = upright[static_cast<size_t>(upright_width - 1)];
+        const uint16_t bottom_left = upright[static_cast<size_t>((upright_height - 1) * upright_width)];
+        // La esquina de arriba a la izquierda de la imagen va girando por la pantalla en
+        // el sentido del reloj, y el borde de arriba con ella.
+        switch (turns) {
+            case 0:
+                CHECK(at(0, 0) == top_left && at(width - 1, 0) == top_right);
+                break;
+            case 1:
+                CHECK(at(width - 1, 0) == top_left && at(width - 1, height - 1) == top_right);
+                CHECK(at(0, 0) == bottom_left);
+                break;
+            case 2:
+                CHECK(at(width - 1, height - 1) == top_left && at(0, height - 1) == top_right);
+                break;
+            default:
+                CHECK(at(0, height - 1) == top_left && at(0, 0) == top_right);
+                CHECK(at(width - 1, height - 1) == bottom_left);
+                break;
+        }
+        // No se pierde ni se repite ningún píxel.
+        std::vector<int> seen(upright.size() + 1, 0);
+        for (const uint16_t value : screen) {
+            CHECK(value >= 1 && value <= upright.size());
+            if (value >= 1 && value <= upright.size()) {
+                ++seen[value];
+            }
+        }
+        for (size_t value = 1; value <= upright.size(); ++value) {
+            CHECK(seen[value] == 1);
+        }
+    }
+}
+
 void test_session() {
     const fs::path root = fs::temp_directory_path() / ("zerogallery_test_" + std::to_string(::getpid()));
     fs::remove_all(root);
@@ -303,6 +377,8 @@ int main() {
     test_fit();
     test_exif();
     test_orientation_mapping();
+    test_rotation_from_gravity();
+    test_rotate_to_screen();
     test_session();
 
     if (failures) {

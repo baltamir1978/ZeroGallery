@@ -6,6 +6,7 @@
 
 #include "base_screen.h"
 #include "media_player.h"
+#include "orientation_sensor.h"
 
 #include <memory>
 #include <vector>
@@ -15,6 +16,9 @@ namespace screen {
 /**
  * Foto o vídeo a pantalla completa. Qué se enseña lo dice la selección de la sesión;
  * esta pantalla sólo pide al reproductor que lo cargue y pinta lo que va llegando.
+ *
+ * Mientras está abierta mira el acelerómetro: al girar el aparato, la foto o el vídeo y los
+ * rótulos giran con él. La lista de carpetas no gira: se maneja con el teclado delante.
  */
 class ViewerScreen : public BaseScreen {
 public:
@@ -29,12 +33,16 @@ private:
     void poll();
     void show_status(const char* icon, const char* text);
     void hide_status();
+    /** Coloca y gira el rótulo y el aviso para como está el aparato. */
+    void place_overlays();
 
     static void media_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void playback_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void poll_timer_cb(lv_timer_t* timer);
 
     std::unique_ptr<platform::MediaPlayer> player_;
+    std::unique_ptr<platform::OrientationSensor> orientation_;
+    int turns_{0};
     std::vector<uint16_t> canvas_;
     lv_image_dsc_t canvas_dsc_{};
     lv_obj_t* image_{nullptr};

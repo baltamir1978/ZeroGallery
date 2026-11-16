@@ -96,6 +96,28 @@ bool orientation_swaps_axes(int orientation);
 void oriented_to_stored(int orientation, int width, int height, int x, int y, int& stored_x, int& stored_y);
 
 /**
+ * Cómo hay que pintar para que la imagen se vea derecha con el aparato girado: cuartos de
+ * vuelta (0 a 3) en el sentido del reloj. 0 es el aparato como se usa con el teclado, 1 con
+ * su lado derecho hacia arriba, 2 boca abajo y 3 con el lado izquierdo hacia arriba.
+ *
+ * `sensor_*` es la lectura del acelerómetro (BMI270) en sus propios ejes y en cualquier
+ * unidad: sólo cuentan las proporciones. `current` es el giro que hay ahora, y se conserva
+ * mientras la lectura no diga otra cosa con claridad: con el aparato tumbado (la gravedad
+ * no señala ningún borde) o a medio camino entre dos posiciones, para que no baile.
+ */
+int rotation_from_gravity(double sensor_x, double sensor_y, double sensor_z, int current);
+
+/** Con 1 y 3 cuartos de vuelta la imagen se pinta en vertical: 170×320 en vez de 320×170. */
+bool rotation_swaps_axes(int turns);
+
+/**
+ * Gira una imagen ya compuesta para como se va a ver (`screen_width`×`screen_height`, o al
+ * revés si el giro intercambia los ejes) y la deja en `screen`, que es la pantalla tal como
+ * está montada. Los dos son RGB565 fila a fila.
+ */
+void rotate_to_screen(const uint16_t* upright, int turns, int screen_width, int screen_height, uint16_t* screen);
+
+/**
  * Por dónde va el usuario: carpeta actual, su contenido y el elemento señalado.
  * El visor no tiene estado propio: pasar de foto es mover la selección al siguiente
  * elemento que no sea carpeta, así al volver a la lista se está donde se dejó.
