@@ -17,6 +17,20 @@
     "license": "MIT",
     "source_repo": "https://github.com/baltamir1978/ZeroGallery",
     "author": { "github": "baltamir1978", "display_name": "baltamir1978" },
+    "locales": {
+      "es": {
+        "title": "ZeroGallery",
+        "summary": "Recorre carpetas y mira fotos y vídeos con las flechas"
+      },
+      "zh-CN": {
+        "title": "ZeroGallery",
+        "summary": "浏览文件夹，用方向键查看照片和视频"
+      },
+      "ja": {
+        "title": "ZeroGallery",
+        "summary": "フォルダを開き、矢印キーで写真と動画を見る"
+      }
+    },
     "share_code": "ZGAL",
     "permissions": {
       "camera": false,
