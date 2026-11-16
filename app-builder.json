@@ -1,0 +1,31 @@
+{
+  "app_name": "ZeroGallery",
+  "package_name": "zerogallery",
+  "bin_name": "zerogallery",
+  "version": "0.1.0",
+  "description": "Photo and video gallery for CardputerZero",
+
+  "store": {
+    "summary": "Browse folders and view photos and videos with the arrow keys",
+    "description": "Pick a folder and flip through its photos and videos full screen with the arrow keys (F/X/Z/C work with or without Fn). JPEG photos open natively with EXIF rotation; every other image format, animated GIFs and all videos are decoded by the system ffmpeg, with sound through PipeWire. ESC goes back, hold ESC to exit.",
+    "categories": ["Media"],
+    "screenshots": [
+      "screenshot/folders.png",
+      "screenshot/photo.png"
+    ],
+    "icon": "store/icon.png",
+    "license": "MIT",
+    "source_repo": "https://github.com/baltamir1978/ZeroGallery",
+    "author": { "github": "baltamir1978", "display_name": "baltamir1978" },
+    "share_code": "ZGAL",
+    "permissions": {
+      "camera": false,
+      "microphone": false,
+      "imu": false,
+      "network": false,
+      "additional_hardware": false,
+      "background_service": false,
+      "external_display": false
+    }
+  }
+}

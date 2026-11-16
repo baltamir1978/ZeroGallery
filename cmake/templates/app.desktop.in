@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Gallery
+Comment=@APP_PACKAGE_DESCRIPTION@
+Exec=/usr/bin/@PROJECT_NAME@
+Icon=share/images/zerogallery.png
+Terminal=false
+Categories=AudioVideo;Graphics;
+StartupNotify=false
