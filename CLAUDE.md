@@ -76,6 +76,12 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 - **Probar el giro sin aparato**: `ZEROGALLERY_IIO=<carpeta>` con un `iio:device1/` dentro y
   los tres `in_accel_?_raw` como ficheros corrientes (se reescriben con el simulador en
   marcha); `ZEROGALLERY_ROTATE=0..3` lo fija sin sensor.
+- **En un vídeo las flechas saltan** (`gallery::seek_seconds_for`: ±10 s a los lados, ±30 s
+  arriba y abajo) y de fichero se cambia con `,` y `.`, que en la lista son página arriba y
+  abajo; lo pidió Bruno. En fotos y GIF las flechas siguen cambiando de fichero. Saltar es
+  **otro ffmpeg con `-ss`**, como reanudar; los saltos pedidos mientras tanto se suman. La
+  duración se pregunta a `ffprobe` la primera vez que se salta adelante, para no pasarse del
+  final (se cae como mucho a un segundo de él).
 - **La interfaz está en inglés**, como las demás apps del aparato.
 - El visor no tiene estado propio: pasar de foto mueve la selección de `gallery::Session`.
 
@@ -91,8 +97,10 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.3.0 (16-nov-2026)**: saltos en el vídeo con las flechas y `,` / `.` para cambiar de
+  fichero. Probado en el simulador y **en el aparato: Bruno confirma que van bien**.
 - **0.2.0 (16-nov-2026)**: fotos y vídeos giran con el aparato (acelerómetro). Probado en el
   simulador con un acelerómetro de mentira y **en el aparato: Bruno confirma que funciona**.
 - **0.1.0 (16-nov-2026)**: primera versión. Lista de carpetas, visor de fotos y vídeos, GIF
-  animados, tema claro/oscuro. Probada en el simulador; **sin probar en el aparato** (sonido,
-  fluidez de vídeo en la CM0, que el teclado real mande las teclas esperadas).
+  animados, tema claro/oscuro. Probada en el simulador y en el aparato (Bruno, 16-nov-2026: «todo lo
+  demás lo he probado y está bien»).

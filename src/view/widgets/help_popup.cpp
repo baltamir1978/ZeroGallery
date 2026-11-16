@@ -31,11 +31,11 @@ constexpr std::array<HelpRow, 5> kBrowserRows = {{
 }};
 
 constexpr std::array<HelpRow, 5> kViewerRows = {{
-    {"Z / C", "Previous / next"},
+    {", / .", "Previous / next"},
+    {"Z / C", "Video -10 / +10 s"},
+    {"X / F", "Video -30 / +30 s"},
     {"ENTER", "Pause / play video"},
-    {"TURN IT", "Rotates the picture"},
-    {"ESC", "Back to the list"},
-    {"HOLD ESC", "Exit"},
+    {"ESC", "Back (hold: exit)"},
 }};
 
 } // namespace

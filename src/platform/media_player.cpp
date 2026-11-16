@@ -215,7 +215,8 @@ public:
     Ffmpeg(const Ffmpeg&) = delete;
     Ffmpeg& operator=(const Ffmpeg&) = delete;
 
-    bool start(const std::vector<std::string>& arguments) {
+    /** `tool` es «ffmpeg» o «ffprobe»: `ZEROGALLERY_FFMPEG` sólo cambia el primero. */
+    bool start(const std::vector<std::string>& arguments, const char* tool = "ffmpeg") {
         stop();
         int ends[2];
         if (pipe2(ends, O_CLOEXEC) != 0) {
@@ -224,7 +225,7 @@ public:
 
         // argv se prepara antes del fork: entre fork y exec, en un proceso con hilos,
         // no se puede reservar memoria.
-        const std::string program = env_or("ZEROGALLERY_FFMPEG", "ffmpeg");
+        const std::string program = std::strcmp(tool, "ffmpeg") == 0 ? env_or("ZEROGALLERY_FFMPEG", "ffmpeg") : tool;
         std::vector<char*> argv;
         argv.push_back(const_cast<char*>(program.c_str()));
         for (const auto& argument : arguments) {
@@ -449,6 +450,8 @@ void MediaPlayer::open(const std::string& path, MediaKind kind) {
         ++request_.generation;
         request_.path = path;
         request_.kind = kind;
+        seek_ = 0.0;
+        position_ = 0.0;
         frame_fresh_ = false;
         error_.clear();
         state_ = path.empty() ? MediaState::Idle : MediaState::Loading;
@@ -474,6 +477,21 @@ void MediaPlayer::set_rotation(int turns) {
         rotation_ = ((turns % 4) + 4) % 4;
     }
     wake_.notify_all();
+}
+
+void MediaPlayer::seek(double seconds) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (request_.path.empty() || request_.kind != MediaKind::Video) {
+            return;
+        }
+        seek_ += seconds;
+    }
+    wake_.notify_all();
+}
+
+double MediaPlayer::position() const {
+    return position_;
 }
 
 bool MediaPlayer::take_frame(uint16_t* destination) {
@@ -519,10 +537,14 @@ void MediaPlayer::fail(uint64_t generation, const std::string& message) {
     state_ = MediaState::Error;
 }
 
-MediaPlayer::Event MediaPlayer::wait_for_event(uint64_t generation, uint64_t& toggles_seen, int& turns) {
+MediaPlayer::Event MediaPlayer::wait_for_event(uint64_t generation,
+                                               uint64_t& toggles_seen,
+                                               int& turns,
+                                               double& seek) {
     std::unique_lock<std::mutex> lock(mutex_);
     wake_.wait(lock, [&] {
-        return request_.generation != generation || toggles_ != toggles_seen || rotation_ != turns;
+        return request_.generation != generation || toggles_ != toggles_seen || rotation_ != turns ||
+               seek_ != 0.0;
     });
     if (request_.generation != generation) {
         return Event::Superseded;
@@ -530,6 +552,11 @@ MediaPlayer::Event MediaPlayer::wait_for_event(uint64_t generation, uint64_t& to
     if (toggles_ != toggles_seen) {
         toggles_seen = toggles_;
         return Event::Toggled;
+    }
+    if (seek_ != 0.0) {
+        seek = seek_;
+        seek_ = 0.0;
+        return Event::Sought;
     }
     turns = rotation_;
     return Event::Rotated;
@@ -680,6 +707,30 @@ static std::string audio_output() {
     return has_sound_card() ? "alsa" : "";
 }
 
+/**
+ * Lo que dura el vídeo en segundos, preguntado a `ffprobe` (viene con ffmpeg); 0 si no lo
+ * dice. Hace falta para que saltar adelante no se pase del final: un `-ss` más allá no da
+ * ningún fotograma y la cuenta se quedaría en un sitio que no existe.
+ */
+static double video_duration(const std::string& path) {
+    Ffmpeg probe;
+    if (!probe.start({"-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path}, "ffprobe")) {
+        return 0.0;
+    }
+    char text[64] = {};
+    size_t filled = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (filled < sizeof(text) - 1 && std::chrono::steady_clock::now() < deadline) {
+        const long count = probe.read_some(reinterpret_cast<uint8_t*>(text) + filled, sizeof(text) - 1 - filled, 100);
+        if (count < 0) {
+            break;
+        }
+        filled += static_cast<size_t>(count);
+    }
+    const double seconds = std::atof(text);
+    return seconds > 0.0 ? seconds : 0.0;
+}
+
 void MediaPlayer::play_video(const Request& request) {
     const bool loop = request.kind == MediaKind::Animation;
     std::string audio = loop ? std::string{} : audio_output();
@@ -693,12 +744,42 @@ void MediaPlayer::play_video(const Request& request) {
     }
 
     double position = 0.0;
+    // Sólo se pregunta la primera vez que se salta adelante: -1 es «sin preguntar».
+    double duration = -1.0;
+    // Dónde se cae al saltar `seek` desde `from`: ni antes del principio ni, hacia delante,
+    // más allá de un segundo antes del final (que se vea acabar, no un fotograma parado).
+    const auto landing = [&](double from, double seek) {
+        double to = std::max(0.0, from + seek);
+        if (seek > 0.0) {
+            if (duration < 0.0) {
+                duration = video_duration(request.path);
+            }
+            if (duration > 0.0) {
+                to = std::min(to, std::max(from, duration - 1.0));
+            }
+        }
+        return to;
+    };
     std::vector<uint16_t> upright(kCanvasPixels);
     std::vector<uint16_t> canvas;
 
-    // Parado (en pausa o acabado) se espera aquí. Si mientras se gira el aparato, se pide
-    // a ffmpeg el fotograma en que se quedó, ya girado; `false` es que se ha pedido otra cosa.
-    const auto wait_stopped = [&](MediaState state, double shown_at) {
+    const auto show_stopped = [&](MediaState state, double at) {
+        // Justo al final puede no quedar fotograma que sacar: se prueba un poco antes.
+        if (!show_video_frame(request, at, turns, state)) {
+            show_video_frame(request, std::max(0.0, at - 1.0), turns, state);
+        }
+    };
+
+    enum class Stopped {
+        Superseded, // se ha pedido otra cosa
+        Toggled,    // pausa: seguir (o repetir, si había acabado)
+        Resume,     // acabado y se ha saltado atrás: seguir desde `at`
+    };
+
+    // Parado (en pausa o acabado) se espera aquí. `at` es el fotograma que hay en pantalla:
+    // si se gira el aparato se le pide a ffmpeg ese mismo, ya girado, y si se salta, el de
+    // donde se cae, y `at` se queda ahí.
+    const auto wait_stopped = [&](MediaState state, double& at) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (request_.generation == request.generation) {
@@ -706,17 +787,27 @@ void MediaPlayer::play_video(const Request& request) {
             }
         }
         for (;;) {
-            const Event event = wait_for_event(request.generation, toggles_seen, turns);
+            double seek = 0.0;
+            const Event event = wait_for_event(request.generation, toggles_seen, turns, seek);
             if (event == Event::Superseded) {
-                return false;
+                return Stopped::Superseded;
             }
             if (event == Event::Toggled) {
-                return true;
+                return Stopped::Toggled;
             }
-            // Justo al final puede no quedar fotograma que sacar: se prueba un poco antes.
-            if (!show_video_frame(request, shown_at, turns, state)) {
-                show_video_frame(request, std::max(0.0, shown_at - 1.0), turns, state);
+            if (event == Event::Sought) {
+                if (state == MediaState::Ended) {
+                    // Más allá del final no hay nada; hacia atrás, se vuelve a ver desde ahí.
+                    if (seek < 0.0) {
+                        at = std::max(0.0, at + seek);
+                        return Stopped::Resume;
+                    }
+                    continue;
+                }
+                at = landing(at, seek);
+                position_ = at;
             }
+            show_stopped(state, at);
         }
     };
 
@@ -735,6 +826,7 @@ void MediaPlayer::play_video(const Request& request) {
         long frames = 0;
         bool paused = false;
         bool rotated = false;
+        double sought = 0.0;
         for (;;) {
             if (superseded(request.generation)) {
                 return;
@@ -749,8 +841,12 @@ void MediaPlayer::play_video(const Request& request) {
                     turns = rotation_;
                     rotated = true;
                 }
+                if (seek_ != 0.0) {
+                    sought = seek_;
+                    seek_ = 0.0;
+                }
             }
-            if (paused || rotated) {
+            if (paused || rotated || sought != 0.0) {
                 break;
             }
             const long count = ffmpeg.read_some(bytes_of(upright) + filled, kFrameBytes - filled, 100);
@@ -763,24 +859,30 @@ void MediaPlayer::play_video(const Request& request) {
                 ++frames;
                 to_canvas(upright, turns, canvas);
                 publish(canvas, request.generation, MediaState::Playing);
+                position_ = position + static_cast<double>(frames) / kVideoFps;
             }
         }
 
         // Una animación no sabe por dónde iba (se repite): al reanudar empieza otra vez.
         position = loop ? 0.0 : position + static_cast<double>(frames) / kVideoFps;
+        if (sought != 0.0) {
+            // Saltar es lo mismo que reanudar, pero desde otro sitio: otro ffmpeg con -ss.
+            position = landing(position, sought);
+        }
+        position_ = position;
 
         if (paused) {
             ffmpeg.stop();
-            if (rotated) {
-                // Pausa y giro a la vez: el fotograma que queda en pantalla, ya girado.
-                show_video_frame(request, position, turns, MediaState::Paused);
+            if (rotated || sought != 0.0) {
+                // Pausa a la vez que giro o salto: el fotograma que toca, no el que había.
+                show_stopped(MediaState::Paused, position);
             }
-            if (!wait_stopped(MediaState::Paused, position)) {
+            if (wait_stopped(MediaState::Paused, position) == Stopped::Superseded) {
                 return;
             }
             continue;
         }
-        if (rotated) {
+        if (rotated || sought != 0.0) {
             ffmpeg.stop();
             continue;
         }
@@ -803,10 +905,13 @@ void MediaPlayer::play_video(const Request& request) {
         }
 
         // El último fotograma que se vio es el anterior a donde se quedó la cuenta.
-        if (!wait_stopped(MediaState::Ended, std::max(0.0, position - 1.0 / kVideoFps))) {
+        double at = std::max(0.0, position - 1.0 / kVideoFps);
+        const Stopped next = wait_stopped(MediaState::Ended, at);
+        if (next == Stopped::Superseded) {
             return;
         }
-        position = 0.0;
+        position = next == Stopped::Resume ? at : 0.0;
+        position_ = position;
     }
 }
 

@@ -38,6 +38,10 @@ public:
     lv_subject_t* media_subject();
     /** Cambia cuando se pide pausar o reanudar el vídeo. */
     lv_subject_t* playback_subject();
+    /** Cambia cuando se pide saltar en el vídeo; cuánto, lo dice `seek_seconds()`. */
+    lv_subject_t* seek_subject();
+    /** Segundos del último salto pedido: positivo adelante, negativo atrás. */
+    int seek_seconds() const;
 
     const gallery::Session& session() const;
 
@@ -74,6 +78,8 @@ private:
     reactive::IntSubject listing_subject_;
     reactive::IntSubject media_subject_;
     reactive::IntSubject playback_subject_;
+    reactive::IntSubject seek_subject_;
+    int seek_seconds_{0};
 };
 
 } // namespace viewmodel

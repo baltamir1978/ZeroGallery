@@ -72,6 +72,16 @@ public:
      */
     void set_rotation(int turns);
 
+    /**
+     * Salta en el vídeo `seconds` adelante (o atrás, si es negativo) desde donde va. Varios
+     * saltos seguidos se suman. Acabado, saltar atrás lo vuelve a poner en marcha desde ahí.
+     * En fotos y animaciones no hace nada.
+     */
+    void seek(double seconds);
+
+    /** Por dónde va el vídeo, en segundos. */
+    double position() const;
+
     /** Copia el último fotograma en `destination` (kCanvasPixels) si hay uno nuevo. */
     bool take_frame(uint16_t* destination);
 
@@ -90,6 +100,7 @@ private:
         Superseded, // se ha pedido otra cosa
         Toggled,    // pausa
         Rotated,    // se ha girado el aparato
+        Sought,     // se ha pedido saltar
     };
 
     void show_still(const Request& request, int turns);
@@ -98,7 +109,7 @@ private:
     void publish(const std::vector<uint16_t>& frame, uint64_t generation, MediaState state);
     void fail(uint64_t generation, const std::string& message);
     /** Espera con el vídeo parado a que pase algo; deja al día `toggles_seen` y `turns`. */
-    Event wait_for_event(uint64_t generation, uint64_t& toggles_seen, int& turns);
+    Event wait_for_event(uint64_t generation, uint64_t& toggles_seen, int& turns, double& seek);
     /** Fotograma suelto del vídeo en `seconds`, para volver a pintarlo girado estando parado. */
     bool show_video_frame(const Request& request, double seconds, int turns, MediaState state);
 
@@ -108,6 +119,8 @@ private:
     bool quit_{false};
     uint64_t toggles_{0};
     int rotation_{0};
+    double seek_{0.0}; // salto pedido y todavía sin atender
+    std::atomic<double> position_{0.0};
     std::vector<uint16_t> frame_;
     bool frame_fresh_{false};
     std::string error_;

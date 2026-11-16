@@ -38,6 +38,7 @@ private:
 
     static void media_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void playback_observer(lv_observer_t* observer, lv_subject_t* subject);
+    static void seek_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void poll_timer_cb(lv_timer_t* timer);
 
     std::unique_ptr<platform::MediaPlayer> player_;
@@ -55,6 +56,10 @@ private:
     bool is_video_{false};
     bool loading_notice_{false};
     int32_t playback_seen_{0};
+    int32_t seek_seen_{0};
+    // Tras un salto, el rótulo enseña un momento por dónde va el vídeo.
+    bool seek_caption_{false};
+    long seek_caption_second_{-1};
     uint32_t loading_since_{0};
     uint32_t caption_since_{0};
 };

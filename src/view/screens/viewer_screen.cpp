@@ -109,6 +109,8 @@ void ViewerScreen::build_content(lv_obj_t* content) {
 
     playback_seen_ = lv_subject_get_int(view_model().playback_subject());
     lv_subject_add_observer_obj(view_model().playback_subject(), playback_observer, content, this);
+    seek_seen_ = lv_subject_get_int(view_model().seek_subject());
+    lv_subject_add_observer_obj(view_model().seek_subject(), seek_observer, content, this);
     // LVGL llama al observador al añadirlo: esa primera llamada carga lo señalado.
     lv_subject_add_observer_obj(view_model().media_subject(), media_observer, content, this);
 
@@ -143,6 +145,7 @@ void ViewerScreen::load_selected() {
     lv_label_set_text(caption_, caption.c_str());
     lv_obj_remove_flag(caption_, LV_OBJ_FLAG_HIDDEN);
     caption_since_ = lv_tick_get();
+    seek_caption_ = false;
     place_overlays();
 }
 
@@ -197,6 +200,23 @@ void ViewerScreen::poll() {
 
     if (!lv_obj_has_flag(caption_, LV_OBJ_FLAG_HIDDEN) && lv_tick_elaps(caption_since_) >= kCaptionMs) {
         lv_obj_add_flag(caption_, LV_OBJ_FLAG_HIDDEN);
+        seek_caption_ = false;
+    }
+    if (seek_caption_) {
+        // El salto lo atiende el hilo del reproductor: el rótulo sigue a donde haya caído.
+        const long second = static_cast<long>(player_->position());
+        if (second != seek_caption_second_) {
+            seek_caption_second_ = second;
+            char text[32];
+            if (second >= 3600) {
+                lv_snprintf(text, sizeof(text), "%ld:%02ld:%02ld", second / 3600, second / 60 % 60, second % 60);
+            }
+            else {
+                lv_snprintf(text, sizeof(text), "%ld:%02ld", second / 60, second % 60);
+            }
+            lv_label_set_text(caption_, text);
+            place_overlays();
+        }
     }
 
     const auto state = player_->state();
@@ -276,6 +296,23 @@ void ViewerScreen::playback_observer(lv_observer_t* observer, lv_subject_t* subj
     if (screen->is_video_) {
         screen->player_->toggle_pause();
     }
+}
+
+void ViewerScreen::seek_observer(lv_observer_t* observer, lv_subject_t* subject) {
+    auto* screen = static_cast<ViewerScreen*>(lv_observer_get_user_data(observer));
+    if (!screen) {
+        return;
+    }
+    const int32_t value = lv_subject_get_int(subject);
+    if (value == screen->seek_seen_) {
+        return;
+    }
+    screen->seek_seen_ = value;
+    screen->player_->seek(screen->view_model().seek_seconds());
+    screen->seek_caption_ = true;
+    screen->seek_caption_second_ = -1;
+    lv_obj_remove_flag(screen->caption_, LV_OBJ_FLAG_HIDDEN);
+    screen->caption_since_ = lv_tick_get();
 }
 
 void ViewerScreen::poll_timer_cb(lv_timer_t* timer) {

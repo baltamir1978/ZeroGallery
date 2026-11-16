@@ -52,6 +52,12 @@ enum class Action {
  */
 Action action_for_key(uint32_t key);
 
+/**
+ * Segundos que salta un vídeo con cada flecha: derecha e izquierda, 10 adelante y atrás;
+ * arriba y abajo, 30 adelante y atrás. 0 si la acción no es una flecha.
+ */
+int seek_seconds_for(Action action);
+
 /** Tipo según la extensión; `false` si no es ni foto ni vídeo. */
 bool classify(std::string_view file_name, Kind& kind);
 

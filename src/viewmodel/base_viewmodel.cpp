@@ -29,7 +29,8 @@ BaseViewModel::BaseViewModel(std::filesystem::path start_directory)
       quit_requested_subject_(false),
       listing_subject_(0),
       media_subject_(0),
-      playback_subject_(0) {}
+      playback_subject_(0),
+      seek_subject_(0) {}
 
 BaseViewModel::~BaseViewModel() = default;
 
@@ -59,6 +60,14 @@ lv_subject_t* BaseViewModel::media_subject() {
 
 lv_subject_t* BaseViewModel::playback_subject() {
     return playback_subject_.native();
+}
+
+lv_subject_t* BaseViewModel::seek_subject() {
+    return seek_subject_.native();
+}
+
+int BaseViewModel::seek_seconds() const {
+    return seek_seconds_;
 }
 
 const gallery::Session& BaseViewModel::session() const {
@@ -140,15 +149,27 @@ bool BaseViewModel::handle_browser(gallery::Action action) {
 }
 
 bool BaseViewModel::handle_viewer(gallery::Action action) {
+    // En un vídeo las flechas saltan dentro de él; de fichero se cambia con coma y punto.
+    // Un GIF no cuenta: se repite solo y no tiene por dónde saltar.
+    const auto* entry = session_.selected_entry();
+    const int seek = gallery::seek_seconds_for(action);
+    if (seek != 0 && entry && entry->kind == gallery::Kind::Video) {
+        seek_seconds_ = seek;
+        seek_subject_.set(seek_subject_.value() + 1);
+        return true;
+    }
+
     switch (action) {
         case gallery::Action::Left:
         case gallery::Action::Up:
+        case gallery::Action::PageUp:
             if (session_.step_media(-1)) {
                 media_subject_.set(media_subject_.value() + 1);
             }
             return true;
         case gallery::Action::Right:
         case gallery::Action::Down:
+        case gallery::Action::PageDown:
             if (session_.step_media(1)) {
                 media_subject_.set(media_subject_.value() + 1);
             }

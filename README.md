@@ -29,6 +29,7 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
   el vídeo se dan la vuelta para seguir viéndose derechos (lo dice el acelerómetro), y de lado
   se encajan en 170×320, que es como mejor se ven las fotos y los vídeos verticales. Tumbado
   en la mesa se queda como estaba. La lista de carpetas no gira.
+- **Saltar en un vídeo** con las flechas: 10 segundos a los lados y 30 arriba y abajo.
 - **Sonido** por PipeWire (el servidor de sonido del aparato): suena por donde esté saliendo
   el sonido del sistema —altavoz, auriculares o Bluetooth— y con su volumen. Si un vídeo no
   tiene sonido o no hay salida, se reproduce sólo la imagen.
@@ -37,19 +38,25 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
 
 Las flechas del Cardputer Zero están en `F`, `Z`, `X` y `C`: valen **con o sin `Fn`**.
 
-| Tecla | En la lista | En el visor |
-|---|---|---|
-| `F` / `X` (↑ ↓) | Subir y bajar (dejándola pulsada, corre) | Anterior / siguiente |
-| `Z` / `C` (← →) | Carpeta de arriba / abrir | Anterior / siguiente |
-| `Enter` o espacio | Abrir carpeta, foto o vídeo | Pausar o reanudar el vídeo; repetirlo si acabó |
-| Girar el aparato | — | Gira la foto o el vídeo |
-| `Esc` | Carpeta de arriba | Volver a la lista |
-| `Esc` **mantenido** | Salir de la app | Salir de la app |
-| `T` | Tema claro / oscuro (se recuerda) | Lo mismo |
-| `Fn`+`H` | Ayuda | Ayuda |
-| `Fn`+`J` | Captura en `~/Pictures/Screenshots` | Lo mismo |
+| Tecla | En la lista | Viendo una foto | Viendo un vídeo |
+|---|---|---|---|
+| `Z` / `C` (← →) | Carpeta de arriba / abrir | Anterior / siguiente | 10 s atrás / adelante |
+| `F` / `X` (↑ ↓) | Subir y bajar (dejándola pulsada, corre) | Anterior / siguiente | 30 s adelante / atrás |
+| `,` / `.` | Página arriba / abajo | Anterior / siguiente | Anterior / siguiente |
+| `Enter` o espacio | Abrir carpeta, foto o vídeo | — | Pausar o reanudar; repetirlo si acabó |
+| Girar el aparato | — | Gira la foto | Gira el vídeo |
+| `Esc` | Carpeta de arriba | Volver a la lista | Volver a la lista |
+| `Esc` **mantenido** | Salir de la app | Salir de la app | Salir de la app |
+| `T` | Tema claro / oscuro (se recuerda) | Lo mismo | Lo mismo |
+| `Fn`+`H` | Ayuda | Ayuda | Ayuda |
+| `Fn`+`J` | Captura en `~/Pictures/Screenshots` | Lo mismo | Lo mismo |
 
 En la carpeta inicial un `Esc` corto no sale: recuerda que hay que mantenerlo.
+
+Al saltar en un vídeo, arriba a la izquierda sale un momento por dónde va (`1:23`). Saltar
+adelante llega como mucho a un segundo del final, y con el vídeo acabado saltar atrás lo vuelve
+a poner en marcha desde ahí. Los saltos valen también en pausa. Un GIF animado no es un vídeo:
+en él las flechas pasan al fichero anterior o siguiente, como en una foto.
 
 ## Instalar
 
@@ -107,12 +114,13 @@ tests/gallery_test.cpp       pruebas de src/model
 y salida con `Esc`. Las órdenes de `ffmpeg` que usa la app se han comprobado con 23 formatos de
 imagen y 11 combinaciones de contenedor y códec de vídeo.
 
+**0.3.0 (16-nov-2026)** — en un vídeo las flechas saltan 10 o 30 segundos, y con `,` y `.` se
+cambia de fichero. Probado en el simulador (en marcha, en pausa, al final y pasándose del
+final) y comprobado en el aparato.
+
 **0.2.0 (16-nov-2026)** — fotos y vídeos giran con el aparato. Probado en el simulador con un
 acelerómetro de mentira en las cuatro posiciones (foto, vídeo en marcha y en pausa) y
 comprobado en el aparato.
-
-Quedan por confirmar en el aparato el sonido (en el simulador no había salida de audio) y la
-fluidez con vídeos de alta resolución, que la CM0 decodifica por software.
 
 ## Licencia
 

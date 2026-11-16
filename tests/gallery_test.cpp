@@ -128,6 +128,14 @@ void test_keys() {
     CHECK(gallery::action_for_key(' ') == Action::Select);
     CHECK(gallery::action_for_key(27) == Action::Back);
     CHECK(gallery::action_for_key('q') == Action::None);
+    CHECK(gallery::action_for_key(',') == Action::PageUp);
+    CHECK(gallery::action_for_key('.') == Action::PageDown);
+    // En un vídeo las flechas saltan: 10 s a los lados, 30 s arriba y abajo.
+    CHECK(gallery::seek_seconds_for(gallery::action_for_key('c')) == 10);
+    CHECK(gallery::seek_seconds_for(gallery::action_for_key('z')) == -10);
+    CHECK(gallery::seek_seconds_for(gallery::action_for_key('f')) == 30);
+    CHECK(gallery::seek_seconds_for(gallery::action_for_key('x')) == -30);
+    CHECK(gallery::seek_seconds_for(Action::Select) == 0);
 }
 
 void test_fit() {

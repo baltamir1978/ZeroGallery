@@ -104,9 +104,15 @@ Action action_for_key(uint32_t key) {
         case 'c':
         case 'C':
             return Action::Right;
+        // Coma y punto (con «<» y «>» pintados): en la lista, una página; en el visor,
+        // el fichero anterior o el siguiente, también en un vídeo, donde las flechas saltan.
         case kKeyPrev:
+        case ',':
+        case '<':
             return Action::PageUp;
         case kKeyNext:
+        case '.':
+        case '>':
             return Action::PageDown;
         case kKeyHome:
             return Action::First;
@@ -371,6 +377,21 @@ int rotation_from_gravity(double sensor_x, double sensor_y, double sensor_z, int
     }
     const int turns = static_cast<int>(std::lround(angle / 90.0));
     return ((turns % 4) + 4) % 4;
+}
+
+int seek_seconds_for(Action action) {
+    switch (action) {
+        case Action::Right:
+            return 10;
+        case Action::Left:
+            return -10;
+        case Action::Up:
+            return 30;
+        case Action::Down:
+            return -30;
+        default:
+            return 0;
+    }
 }
 
 bool rotation_swaps_axes(int turns) {
