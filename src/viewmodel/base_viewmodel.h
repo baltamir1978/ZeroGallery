@@ -5,12 +5,15 @@
 #pragma once
 
 #include "app_page.h"
+#include "dlna_caster.h"
 #include "gallery.h"
 #include "subjects.h"
 
 #include "lvgl.h"
 
 #include <filesystem>
+#include <memory>
+#include <vector>
 
 namespace viewmodel {
 
@@ -42,6 +45,18 @@ public:
     lv_subject_t* seek_subject();
     /** Segundos del último salto pedido: positivo adelante, negativo atrás. */
     int seek_seconds() const;
+    /**
+     * Cambia cuando se abre o se cierra la lista de teles, se mueve su selección o se
+     * empieza o se deja de mandar a la tele.
+     */
+    lv_subject_t* cast_subject();
+
+    /** Lo que manda a la tele; null hasta la primera vez que se pulsa V. */
+    platform::DlnaCaster* caster() const;
+    bool casting() const;
+    bool picker_open() const;
+    /** Tele señalada en la lista (índice en `caster()->renderers()`). */
+    size_t picker_selection() const;
 
     const gallery::Session& session() const;
 
@@ -65,6 +80,14 @@ public:
 private:
     bool handle_browser(gallery::Action action);
     bool handle_viewer(gallery::Action action);
+    bool handle_picker(gallery::Action action);
+    void open_picker();
+    void close_picker();
+    void stop_casting();
+    /** Manda a la tele lo señalado, si se está mandando y es una foto o un vídeo. */
+    void cast_selected();
+    /** El visor tiene que enseñar otra cosa (y la tele también, si se está mandando). */
+    void publish_media();
     void show_page(model::AppPage page);
     void publish_listing();
 
@@ -79,7 +102,12 @@ private:
     reactive::IntSubject media_subject_;
     reactive::IntSubject playback_subject_;
     reactive::IntSubject seek_subject_;
+    reactive::IntSubject cast_subject_;
     int seek_seconds_{0};
+    std::unique_ptr<platform::DlnaCaster> caster_;
+    dlna::Renderer tv_;
+    bool picker_open_{false};
+    size_t picker_selection_{0};
 };
 
 } // namespace viewmodel

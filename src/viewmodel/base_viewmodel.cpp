@@ -30,7 +30,8 @@ BaseViewModel::BaseViewModel(std::filesystem::path start_directory)
       listing_subject_(0),
       media_subject_(0),
       playback_subject_(0),
-      seek_subject_(0) {}
+      seek_subject_(0),
+      cast_subject_(0) {}
 
 BaseViewModel::~BaseViewModel() = default;
 
@@ -70,6 +71,26 @@ int BaseViewModel::seek_seconds() const {
     return seek_seconds_;
 }
 
+lv_subject_t* BaseViewModel::cast_subject() {
+    return cast_subject_.native();
+}
+
+platform::DlnaCaster* BaseViewModel::caster() const {
+    return caster_.get();
+}
+
+bool BaseViewModel::casting() const {
+    return caster_ && caster_->active();
+}
+
+bool BaseViewModel::picker_open() const {
+    return picker_open_;
+}
+
+size_t BaseViewModel::picker_selection() const {
+    return picker_selection_;
+}
+
 const gallery::Session& BaseViewModel::session() const {
     return session_;
 }
@@ -97,6 +118,22 @@ bool BaseViewModel::handle_key(uint32_t key) {
     }
     if (action == gallery::Action::ToggleTheme) {
         toggle_dark_mode();
+        return true;
+    }
+    if (picker_open_) {
+        return handle_picker(action);
+    }
+    if (action == gallery::Action::Cast) {
+        // En la lista de carpetas la V sólo sirve para dejar de mandar: a qué tele se
+        // elige con una foto delante, que es cuando se sabe qué se va a ver.
+        if (casting()) {
+            stop_casting();
+            return true;
+        }
+        if (page_ != model::AppPage::Viewer) {
+            return false;
+        }
+        open_picker();
         return true;
     }
     return page_ == model::AppPage::Viewer ? handle_viewer(action) : handle_browser(action);
@@ -135,7 +172,7 @@ bool BaseViewModel::handle_browser(gallery::Action action) {
             }
             if (entry->kind != gallery::Kind::Folder) {
                 show_page(model::AppPage::Viewer);
-                media_subject_.set(media_subject_.value() + 1);
+                publish_media();
                 return true;
             }
             session_.enter_selected_folder();
@@ -152,8 +189,20 @@ bool BaseViewModel::handle_viewer(gallery::Action action) {
     // En un vídeo las flechas saltan dentro de él; de fichero se cambia con coma y punto.
     // Un GIF no cuenta: se repite solo y no tiene por dónde saltar.
     const auto* entry = session_.selected_entry();
+    const bool video = entry && entry->kind == gallery::Kind::Video;
     const int seek = gallery::seek_seconds_for(action);
-    if (seek != 0 && entry && entry->kind == gallery::Kind::Video) {
+    // Con el vídeo en la tele, saltar y pausar es cosa de la tele.
+    if (video && casting()) {
+        if (seek != 0) {
+            caster_->seek(seek);
+            return true;
+        }
+        if (action == gallery::Action::Select) {
+            caster_->toggle_pause();
+            return true;
+        }
+    }
+    if (seek != 0 && video) {
         seek_seconds_ = seek;
         seek_subject_.set(seek_subject_.value() + 1);
         return true;
@@ -164,14 +213,14 @@ bool BaseViewModel::handle_viewer(gallery::Action action) {
         case gallery::Action::Up:
         case gallery::Action::PageUp:
             if (session_.step_media(-1)) {
-                media_subject_.set(media_subject_.value() + 1);
+                publish_media();
             }
             return true;
         case gallery::Action::Right:
         case gallery::Action::Down:
         case gallery::Action::PageDown:
             if (session_.step_media(1)) {
-                media_subject_.set(media_subject_.value() + 1);
+                publish_media();
             }
             return true;
         case gallery::Action::Select:
@@ -183,6 +232,10 @@ bool BaseViewModel::handle_viewer(gallery::Action action) {
 }
 
 bool BaseViewModel::back() {
+    if (picker_open_) {
+        close_picker();
+        return true;
+    }
     if (page_ == model::AppPage::Viewer) {
         // La lista se vuelve a crear al cambiar de pantalla y lee la selección de la
         // sesión, que ya apunta a lo último que se vio.
@@ -203,6 +256,98 @@ void BaseViewModel::request_quit() {
 void BaseViewModel::show_page(model::AppPage page) {
     page_ = page;
     current_page_subject_.set(static_cast<int>(page));
+}
+
+bool BaseViewModel::handle_picker(gallery::Action action) {
+    const size_t count = caster_ ? caster_->renderers().size() : 0;
+    switch (action) {
+        case gallery::Action::Up:
+            if (picker_selection_ > 0) {
+                --picker_selection_;
+                cast_subject_.set(cast_subject_.value() + 1);
+            }
+            return true;
+        case gallery::Action::Down:
+            if (picker_selection_ + 1 < count) {
+                ++picker_selection_;
+                cast_subject_.set(cast_subject_.value() + 1);
+            }
+            return true;
+        case gallery::Action::Select:
+        case gallery::Action::Right: {
+            if (picker_selection_ >= count) {
+                return true;
+            }
+            tv_ = caster_->renderers()[picker_selection_];
+            close_picker();
+            cast_selected();
+            // El visor vuelve a mirar: un vídeo ya no se reproduce aquí sino en la tele.
+            media_subject_.set(media_subject_.value() + 1);
+            return true;
+        }
+        case gallery::Action::Cast:
+            close_picker();
+            return true;
+        default:
+            // Con la lista abierta el resto de teclas no hace nada: que no cambie la foto
+            // por detrás sin que se vea.
+            return true;
+    }
+}
+
+void BaseViewModel::open_picker() {
+    if (!caster_) {
+        caster_ = std::make_unique<platform::DlnaCaster>();
+    }
+    caster_->start_discovery();
+    // La última tele usada sale ya señalada, si sigue en la lista.
+    picker_selection_ = 0;
+    const auto renderers = caster_->renderers();
+    for (size_t i = 0; i < renderers.size(); ++i) {
+        if (renderers[i].udn == tv_.udn) {
+            picker_selection_ = i;
+        }
+    }
+    picker_open_ = true;
+    cast_subject_.set(cast_subject_.value() + 1);
+}
+
+void BaseViewModel::close_picker() {
+    picker_open_ = false;
+    if (caster_) {
+        caster_->stop_discovery();
+    }
+    cast_subject_.set(cast_subject_.value() + 1);
+}
+
+void BaseViewModel::stop_casting() {
+    if (caster_) {
+        caster_->stop();
+    }
+    cast_subject_.set(cast_subject_.value() + 1);
+    // Un vídeo que estaba en la tele vuelve a verse aquí.
+    if (page_ == model::AppPage::Viewer) {
+        media_subject_.set(media_subject_.value() + 1);
+    }
+}
+
+void BaseViewModel::cast_selected() {
+    if (!caster_ || tv_.av_transport.empty()) {
+        return;
+    }
+    const auto* entry = session_.selected_entry();
+    if (!entry || entry->kind == gallery::Kind::Folder) {
+        return;
+    }
+    caster_->cast(tv_, session_.selected_path().string(), entry->kind == gallery::Kind::Video);
+    cast_subject_.set(cast_subject_.value() + 1);
+}
+
+void BaseViewModel::publish_media() {
+    if (casting()) {
+        cast_selected();
+    }
+    media_subject_.set(media_subject_.value() + 1);
 }
 
 void BaseViewModel::publish_listing() {

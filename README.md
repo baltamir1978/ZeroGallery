@@ -33,6 +33,41 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
 - **Sonido** por PipeWire (el servidor de sonido del aparato): suena por donde esté saliendo
   el sonido del sistema —altavoz, auriculares o Bluetooth— y con su volumen. Si un vídeo no
   tiene sonido o no hay salida, se reproduce sólo la imagen.
+- **Mandar a la tele** (`V`) por DLNA: lo que se está viendo sale en la tele, a su resolución
+  y con su sonido, y se sigue manejando desde el Cardputer (ver abajo).
+
+## Mandar a la tele
+
+Con una foto o un vídeo delante, `V` busca las teles de la red y las lista; `Enter` manda lo
+que se está viendo a la señalada. Desde ese momento, pasar de foto o de vídeo lo cambia
+también en la tele, y en un vídeo las flechas saltan y `Enter` pausa **en la tele**. Arriba a
+la izquierda el rótulo lleva delante `TV` mientras se está mandando. Otra `V` (también desde la
+lista de carpetas) deja de mandar y para la tele; salir de la app también la para.
+
+- La tele no recibe una copia: recibe una dirección y se baja el fichero del Cardputer, que
+  hace de servidor mientras se está mandando (sólo da los ficheros mandados, con una dirección
+  imposible de adivinar, y se cierra al dejar de mandar). Decodifica la tele, así que un vídeo
+  se ve con toda su calidad y el Cardputer apenas gasta: aquí no se reproduce mientras tanto.
+- **Fotos**: las teles sólo aceptan con seguridad JPEG, y no todos. Las fotos que no lo son
+  (PNG, HEIC, WebP, GIF…), los JPEG progresivos, en CMYK, de más de 4096 px o con la orientación
+  en el EXIF (las de móvil) se convierten antes a un JPEG derecho de hasta 4K con `ffmpeg`; es
+  lo que tarda un par de segundos más. El resto va tal cual.
+- **Vídeos** van tal cual: si la tele no sabe abrir un formato, lo dice ella. Antes de mandar se
+  le pregunta qué tipos acepta; un MOV de iPhone (que por dentro es MP4) se le anuncia como MP4,
+  que es como lo aceptan LG, Samsung y Sony.
+- Tienen que estar **en la misma red** (Wi-Fi o cable de casa): las teles se encuentran por
+  multicast, que no pasa por Tailscale. Para una red sin multicast, `ZEROGALLERY_TV=<url de la
+  descripción de la tele>` la añade a mano; `ZEROGALLERY_DLNA_DEBUG=1` cuenta en el terminal
+  todo lo que pasa.
+
+Lo que pide cada marca (DLNA es un estándar, pero cada una lo pone a su manera):
+
+| Tele | Qué hacer | Probado |
+|---|---|---|
+| LG (webOS) | Nada. Tarda 3-4 s en enseñar una foto; un vídeo ya visto lo sigue donde se dejó | Sí: 50UK6500PLA (2018) |
+| Samsung (Tizen) | La primera vez pregunta en la tele si se deja conectar: **Permitir**. Si se dijo que no: Ajustes → General → Administrador de dispositivos externos → Administrador de conexión → Lista de dispositivos | No |
+| Sony Bravia | Ajustes → Red → Red doméstica → **Renderizador** activado, y el Cardputer permitido en su control de acceso | No |
+| Hisense (VIDAA) | Ajustes → Red (o Sistema) → **Compartir contenido** activado. Las Hisense con Google TV pueden no tener DLNA (sólo Chromecast) | No |
 
 ## Teclas
 
@@ -47,6 +82,7 @@ Las flechas del Cardputer Zero están en `F`, `Z`, `X` y `C`: valen **con o sin 
 | Girar el aparato | — | Gira la foto | Gira el vídeo |
 | `Esc` | Carpeta de arriba | Volver a la lista | Volver a la lista |
 | `Esc` **mantenido** | Salir de la app | Salir de la app | Salir de la app |
+| `V` | Dejar de mandar a la tele | Mandar a la tele / dejar de mandar | Lo mismo |
 | `T` | Tema claro / oscuro (se recuerda) | Lo mismo | Lo mismo |
 | `Fn`+`H` | Ayuda | Ayuda | Ayuda |
 | `Fn`+`J` | Captura en `~/Pictures/Screenshots` | Lo mismo | Lo mismo |
@@ -92,10 +128,12 @@ LVGL y, para el aparato, el *sysroot* de M5Stack a `.cache/`.
 src/model/gallery.*          lógica sin LVGL: listar, ordenar, navegar, encajar, EXIF, teclas
 src/viewmodel/               qué hace cada tecla en cada pantalla; avisa a las vistas
 src/platform/media_player.*  hilo que decodifica (libjpeg) y maneja ffmpeg
+src/platform/dlna_caster.*   tele: búsqueda SSDP, servidor HTTP de ficheros y órdenes SOAP
+src/model/dlna.*             DLNA sin red: respuestas, descripciones, SOAP, tipos, cabeceras
 src/platform/linux_input.*   teclado (evdev) y repetición de flechas
 src/view/screens/            lista de carpeta (browser) y visor a pantalla completa (viewer)
 src/app/                     arranque, ESC corto/largo, simulador de escritorio
-tests/gallery_test.cpp       pruebas de src/model
+tests/                       pruebas de src/model (con la descripción real de una LG)
 ```
 
 - Cargar y reproducir va en un hilo aparte: en la CM0 abrir una foto grande tarda décimas de
@@ -108,6 +146,12 @@ tests/gallery_test.cpp       pruebas de src/model
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.4.0 (24-nov-2026)** — mandar a la tele por DLNA con `V`. Probado desde el Cardputer con
+una LG webOS de 2018: fotos (también PNG convertida y JPEG girado por EXIF, que llega derecho),
+un MOV, saltos, pausa, cambiar de fichero, dejar de mandar y salir de la app con la tele en
+marcha. Samsung, Sony y Hisense, sin probar: van por el estándar con los arreglos conocidos de
+cada una.
 
 **0.1.0 (16-nov-2026)** — primera versión. Probada en el simulador de escritorio: carpetas
 (también largas), fotos con giro EXIF, GIF animado, vídeo con pausa, reanudación y repetición,

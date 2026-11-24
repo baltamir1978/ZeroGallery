@@ -21,6 +21,23 @@ constexpr uint32_t kCaptionMs = 2500;
 constexpr uint32_t kLoadingNoticeMs = 350;
 // Separación del rótulo con el nombre a los bordes.
 constexpr int32_t kCaptionMargin = 4;
+// Tras mandar una foto, el aviso con el nombre de la tele se queda un momento.
+constexpr uint32_t kCastShownMs = 1800;
+// Sin teles al cabo de este rato, la lista explica qué puede pasar.
+constexpr uint32_t kNoTvHintMs = 8000;
+constexpr size_t kPickerRows = 4;
+
+std::string clock_text(double seconds) {
+    const long total = seconds > 0 ? static_cast<long>(seconds) : 0;
+    char text[32];
+    if (total >= 3600) {
+        lv_snprintf(text, sizeof(text), "%ld:%02ld:%02ld", total / 3600, total / 60 % 60, total % 60);
+    }
+    else {
+        lv_snprintf(text, sizeof(text), "%ld:%02ld", total / 60, total % 60);
+    }
+    return text;
+}
 
 } // namespace
 
@@ -107,10 +124,13 @@ void ViewerScreen::build_content(lv_obj_t* content) {
     lv_obj_set_style_text_color(status_text_, lv_color_white(), 0);
     hide_status();
 
+    build_picker(content);
+
     playback_seen_ = lv_subject_get_int(view_model().playback_subject());
     lv_subject_add_observer_obj(view_model().playback_subject(), playback_observer, content, this);
     seek_seen_ = lv_subject_get_int(view_model().seek_subject());
     lv_subject_add_observer_obj(view_model().seek_subject(), seek_observer, content, this);
+    lv_subject_add_observer_obj(view_model().cast_subject(), cast_observer, content, this);
     // LVGL llama al observador al añadirlo: esa primera llamada carga lo señalado.
     lv_subject_add_observer_obj(view_model().media_subject(), media_observer, content, this);
 
@@ -132,16 +152,29 @@ void ViewerScreen::load_selected() {
         kind = platform::MediaKind::Animation;
     }
     is_video_ = kind != platform::MediaKind::Still;
-    player_->open(session.selected_path().string(), kind);
+    tv_video_ = view_model().casting() && entry->kind == gallery::Kind::Video;
+    if (tv_video_) {
+        // En la tele: aquí sólo el aviso de cómo va, sin gastar en decodificarlo.
+        player_->close();
+        std::fill(canvas_.begin(), canvas_.end(), uint16_t{0});
+        lv_obj_invalidate(image_);
+        shown_state_ = platform::MediaState::Idle;
+    }
+    else {
+        player_->open(session.selected_path().string(), kind);
+        shown_state_ = platform::MediaState::Loading;
+    }
     loading_since_ = lv_tick_get();
     loading_notice_ = false;
-    shown_state_ = platform::MediaState::Loading;
+    cast_text_.clear();
+    cast_seen_ = platform::CastState::Off;
     hide_status();
 
     size_t index = 0;
     size_t count = 0;
     session.media_position(index, count);
-    const std::string caption = std::to_string(index) + "/" + std::to_string(count) + "  " + entry->name;
+    const std::string caption = (view_model().casting() ? "TV  " : "") + std::to_string(index) + "/" +
+                                std::to_string(count) + "  " + entry->name;
     lv_label_set_text(caption_, caption.c_str());
     lv_obj_remove_flag(caption_, LV_OBJ_FLAG_HIDDEN);
     caption_since_ = lv_tick_get();
@@ -219,6 +252,13 @@ void ViewerScreen::poll() {
         }
     }
 
+    if (picker_was_open_) {
+        update_picker();
+    }
+    if (poll_cast()) {
+        return;
+    }
+
     const auto state = player_->state();
     if (state == platform::MediaState::Loading) {
         if (!loading_notice_ && lv_tick_elaps(loading_since_) >= kLoadingNoticeMs) {
@@ -250,6 +290,215 @@ void ViewerScreen::poll() {
         default:
             hide_status();
             break;
+    }
+}
+
+bool ViewerScreen::poll_cast() {
+    auto* caster = view_model().caster();
+    if (!caster || !caster->active()) {
+        if (cast_status_) {
+            cast_status_ = false;
+            cast_text_.clear();
+            hide_status();
+            // Que el aviso del reproductor de aquí se vuelva a poner si hace falta.
+            shown_state_ = platform::MediaState::Idle;
+        }
+        return false;
+    }
+
+    if (const std::string notice = caster->take_notice(); !notice.empty()) {
+        lv_label_set_text(caption_, notice.c_str());
+        lv_obj_remove_flag(caption_, LV_OBJ_FLAG_HIDDEN);
+        caption_since_ = lv_tick_get();
+        seek_caption_ = false;
+        place_overlays();
+    }
+
+    const auto state = caster->state();
+    if (state != cast_seen_) {
+        cast_seen_ = state;
+        cast_state_since_ = lv_tick_get();
+    }
+    const uint32_t since = lv_tick_elaps(cast_state_since_);
+    const std::string tv = caster->tv_name();
+    const char* icon = view::ICON_TELEVISION;
+    std::string text;
+    switch (state) {
+        case platform::CastState::Sending:
+            // Una foto suele llegar en un par de segundos: el aviso, sólo si tarda.
+            if (tv_video_ || since >= kLoadingNoticeMs) {
+                text = "Sending to TV...";
+            }
+            break;
+        case platform::CastState::Showing:
+            if (since < kCastShownMs) {
+                text = tv;
+            }
+            break;
+        case platform::CastState::Playing:
+        case platform::CastState::Paused:
+            if (tv_video_) {
+                if (state == platform::CastState::Paused) {
+                    icon = view::ICON_PAUSE;
+                }
+                text = tv + "\n" + clock_text(caster->position());
+                if (caster->duration() > 0) {
+                    text += " / " + clock_text(caster->duration());
+                }
+            }
+            break;
+        case platform::CastState::Stopped:
+            if (tv_video_) {
+                icon = view::ICON_PLAY;
+                text = "Ended on the TV";
+            }
+            break;
+        case platform::CastState::Error:
+            icon = view::ICON_WARNING;
+            text = caster->error();
+            break;
+        default:
+            break;
+    }
+
+    if (text.empty()) {
+        if (cast_status_ && !cast_text_.empty()) {
+            hide_status();
+            cast_text_.clear();
+        }
+    }
+    else if (text != cast_text_ || icon != cast_icon_) {
+        cast_text_ = text;
+        cast_icon_ = icon;
+        show_status(icon, text.c_str());
+        place_overlays();
+    }
+    cast_status_ = true;
+
+    // Una foto se sigue viendo aquí: su «Loading» y sus errores siguen valiendo, pero
+    // sólo cuando la tele no tiene nada que decir.
+    return !cast_text_.empty() || tv_video_;
+}
+
+void ViewerScreen::build_picker(lv_obj_t* content) {
+    const lv_font_t* text_font = assets().load_standard_font(12, app::StandardFontWeight::Regular);
+    if (!text_font) {
+        text_font = &lv_font_montserrat_12;
+    }
+    const lv_font_t* small_font = assets().load_standard_font(10);
+
+    picker_ = lv_obj_create(content);
+    lv_obj_remove_style_all(picker_);
+    lv_obj_set_size(picker_, 280, 132);
+    lv_obj_center(picker_);
+    lv_obj_set_style_bg_opa(picker_, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(picker_, 6, 0);
+    lv_obj_set_style_border_width(picker_, 1, 0);
+    lv_obj_set_style_pad_all(picker_, 8, 0);
+    lv_obj_remove_flag(picker_, LV_OBJ_FLAG_SCROLLABLE);
+
+    picker_title_ = lv_label_create(picker_);
+    lv_obj_set_style_text_font(picker_title_, text_font, 0);
+    lv_obj_align(picker_title_, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    for (size_t i = 0; i < picker_rows_.size(); ++i) {
+        auto* row = lv_label_create(picker_);
+        lv_obj_set_style_text_font(row, text_font, 0);
+        lv_label_set_long_mode(row, LV_LABEL_LONG_DOT);
+        lv_obj_set_size(row, LV_PCT(100), 20);
+        lv_obj_set_style_pad_hor(row, 6, 0);
+        lv_obj_set_style_pad_top(row, 2, 0);
+        lv_obj_set_style_radius(row, 4, 0);
+        lv_obj_align(row, LV_ALIGN_TOP_LEFT, 0, 20 + static_cast<int32_t>(i) * 21);
+        picker_rows_[i] = row;
+    }
+
+    picker_hint_ = lv_label_create(picker_);
+    lv_obj_set_style_text_font(picker_hint_, small_font ? small_font : &lv_font_montserrat_10, 0);
+    lv_label_set_long_mode(picker_hint_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(picker_hint_, LV_PCT(100));
+    lv_obj_align(picker_hint_, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_add_flag(picker_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ViewerScreen::update_picker() {
+    const bool open = view_model().picker_open();
+    if (!open) {
+        if (picker_was_open_) {
+            lv_obj_add_flag(picker_, LV_OBJ_FLAG_HIDDEN);
+            picker_was_open_ = false;
+        }
+        return;
+    }
+    auto* caster = view_model().caster();
+    if (!caster) {
+        return;
+    }
+    if (!picker_was_open_) {
+        picker_was_open_ = true;
+        picker_opened_ = lv_tick_get();
+        picker_version_seen_ = caster->renderers_version() + 1; // que se pinte
+        picker_empty_hint_ = false;
+        lv_obj_remove_flag(picker_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(picker_);
+    }
+    const auto colors = view::palette(view_model().is_dark_mode());
+    lv_obj_set_style_bg_color(picker_, colors.surface, 0);
+    lv_obj_set_style_border_color(picker_, colors.border, 0);
+    lv_obj_set_style_text_color(picker_title_, colors.text, 0);
+    lv_obj_set_style_text_color(picker_hint_, colors.text_disabled, 0);
+
+    const auto renderers = caster->renderers();
+    const bool empty_hint = renderers.empty() && lv_tick_elaps(picker_opened_) >= kNoTvHintMs;
+    // Se repinta sólo si cambia algo: esto se llama en cada vuelta del temporizador.
+    const int32_t selection = static_cast<int32_t>(view_model().picker_selection());
+    const int32_t dark = view_model().is_dark_mode() ? 1 : 0;
+    if (picker_version_seen_ == caster->renderers_version() && picker_drawn_selection_ == selection && picker_drawn_dark_ == dark &&
+        picker_empty_hint_ == empty_hint) {
+        return;
+    }
+    picker_version_seen_ = caster->renderers_version();
+    picker_drawn_selection_ = selection;
+    picker_drawn_dark_ = dark;
+    picker_empty_hint_ = empty_hint;
+
+    lv_label_set_text(picker_title_, renderers.empty() ? "Looking for TVs..." : "Send to TV");
+    // La ventana de filas sigue a la selección.
+    const size_t first = renderers.size() <= kPickerRows || static_cast<size_t>(selection) < kPickerRows
+                             ? 0
+                             : static_cast<size_t>(selection) + 1 - kPickerRows;
+    for (size_t i = 0; i < picker_rows_.size(); ++i) {
+        auto* row = picker_rows_[i];
+        const size_t index = first + i;
+        if (index >= renderers.size()) {
+            lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(row, renderers[index].name.c_str());
+        const bool selected = static_cast<int32_t>(index) == selection;
+        lv_obj_set_style_bg_color(row, colors.primary, 0);
+        lv_obj_set_style_bg_opa(row, selected ? LV_OPA_30 : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_text_color(row, selected ? colors.primary : colors.text, 0);
+    }
+    if (empty_hint) {
+        lv_label_set_text(picker_hint_, "None yet. Is the TV on and on this Wi-Fi? (Samsung, Sony, Hisense: allow "
+                                        "the device or turn on sharing / renderer)");
+    }
+    else {
+        lv_label_set_text(picker_hint_, renderers.empty() ? "ESC cancel" : "ENTER send   F/X choose   ESC cancel");
+    }
+}
+
+void ViewerScreen::cast_observer(lv_observer_t* observer, lv_subject_t*) {
+    auto* screen = static_cast<ViewerScreen*>(lv_observer_get_user_data(observer));
+    if (screen && screen->picker_) {
+        if (screen->view_model().picker_open() && !screen->picker_was_open_) {
+            screen->update_picker();
+        }
+        else if (screen->picker_was_open_) {
+            screen->update_picker();
+        }
     }
 }
 

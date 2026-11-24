@@ -82,6 +82,31 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   **otro ffmpeg con `-ss`**, como reanudar; los saltos pedidos mientras tanto se suman. La
   duración se pregunta a `ffprobe` la primera vez que se salta adelante, para no pasarse del
   final (se cae como mucho a un segundo de él).
+- **Mandar a la tele es DLNA (UPnP AV), dentro de la galería y no en una app aparte** (lo
+  decidió Bruno, 24-nov-2026): lo útil es «esta foto en la tele» y eso sólo lo sabe el visor;
+  copiar la pantalla de 320×170 no merece la pena. La lógica sin red está en
+  `src/model/dlna.*` (con pruebas, usando la descripción real de la LG de Bruno con los
+  identificadores cambiados, en `tests/fixtures`), y la red en `src/platform/dlna_caster.*`:
+  SSDP por cada interfaz con multicast, un servidor HTTP propio (con `Range`, que las teles
+  usan para leer el índice de un MP4 del final del fichero) que sólo vive mientras se manda,
+  y órdenes SOAP. Sin librerías: libupnp o gupnp serían más que toda la app.
+- **Cosas de las teles que ya se han visto** (no quitarlas sin probar): la LG no contesta a
+  `SetAVTransportURI` ni a `Play` hasta que ha abierto el fichero (3-6 s una foto): el tiempo
+  máximo de esas dos es 20 s. Cierra la conexión a medias para pedir otro trozo: sin
+  `SIGPIPE` ignorado, `sendfile()` mataba la app. Los metadatos DIDL-Lite van siempre (LG y
+  Samsung no reproducen sin ellos), el tipo se elige con lo que la tele dice aceptar
+  (`GetProtocolInfo`; la LG no dice `video/quicktime` pero abre los MOV como `video/mp4`),
+  `Play` se reintenta si contesta 701 y `SetAVTransportURI` se repite tras un `Stop` si falla
+  (Samsung). Las fotos se convierten a JPEG secuencial, derecho y de hasta 4K
+  (`dlna::photo_needs_conversion`): el EXIF lo respetan unas teles sí y otras no.
+- **Con un vídeo en la tele, aquí no se reproduce** (se cierra el ffmpeg local): ahorra CPU y
+  batería. Al dejar de mandar, el visor lo vuelve a abrir.
+- **El cortafuegos del portátil (`ufw`) no deja probar con la tele desde el PC**: se come las
+  respuestas SSDP y no dejaría a la tele bajarse el fichero. Se prueba desde el aparato, que no
+  tiene cortafuegos y está en la misma Wi-Fi que la LG.
+- **Las teclas del aparato** pasan por `map_evdev_key` (`linux_input.cpp`), que sólo deja pasar
+  las letras que usa la app: una tecla nueva hay que añadirla ahí (la `V` faltaba y en el
+  simulador sí iba).
 - **La interfaz está en inglés**, como las demás apps del aparato.
 - El visor no tiene estado propio: pasar de foto mueve la selección de `gallery::Session`.
 
@@ -95,8 +120,27 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 - `app-builder.json` ya tiene la ficha para la tienda del Cardputer Zero (`czdev publish`),
   pero **no está publicada**: la primera publicación pide un vídeo de la app en el aparato.
 
+## Pendiente
+
+- **Mandar por HDMI** (Bruno quiere tenerlo apuntado, 24-nov-2026). Idea: con un cable HDMI
+  puesto (`/sys/class/drm/card*-HDMI-A-1/status` = `connected`), que `V` ofrezca también
+  «HDMI» en la lista de teles y el visor pinte la foto o el vídeo a resolución completa en esa
+  salida por DRM/KMS (p. ej. lanzando `mpv --vo=drm --hwdec=v4l2m2m-copy` o ffmpeg a un plano
+  KMS), con la decodificación H.264 por hardware de la CM0. Choca con lo que hace ZeroPower: el
+  escritorio HDMI (lightdm) está apagado en `cpzero` y se recomendó `gpu_mem=16`, que no
+  bastaría para la decodificación por hardware. Bruno dice que no usa HDMI: por eso va detrás
+  de DLNA.
+- **Probar en Samsung, Sony y Hisense** (teles de amigos de Bruno): están los arreglos
+  conocidos, pero sólo se ha probado en la LG.
+
 ## Estado
 
+- **0.4.0 (24-nov-2026)**: mandar a la tele por DLNA (`V`). Probado desde el aparato con la LG
+  50UK6500PLA de Bruno: búsqueda (la encuentra en menos de un segundo), PNG convertida, JPEG
+  con EXIF 6 (llega derecho a 1600×1200), MOV anunciado como MP4, saltos de ±10 s, pausa y
+  reanudar, pasar de foto a vídeo, dejar de mandar (el vídeo vuelve a verse aquí) y salir con
+  la tele en marcha (se queda en `STOPPED`; la app sale en 1,5 s). Ficha de la tienda: permiso
+  `network`. **Sin probar por Bruno** en el aparato ni en Samsung, Sony o Hisense.
 - **Probada en el aparato (24-nov-2026):** Bruno la da por buena («zerogallery ok»), con la 0.3.1.
 
 - **0.3.1 (20-nov-2026)**: la app ya no tiene **un núcleo al 100 %** en el aparato. Sin

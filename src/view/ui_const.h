@@ -19,6 +19,7 @@ constexpr const char* ICON_VIDEO              = "\uE4DA";
 constexpr const char* ICON_PLAY               = "\uE3D0";
 constexpr const char* ICON_PAUSE              = "\uE39E";
 constexpr const char* ICON_WARNING            = "\uE4E0";
+constexpr const char* ICON_TELEVISION         = "\uE754";
 constexpr const char* ICON_SIGN_OUT           = "\uE42A";
 constexpr const char* ICON_TEXT_BOLD          = "\uE5BE";
 constexpr const char* ICON_MOON               = "\uE330";

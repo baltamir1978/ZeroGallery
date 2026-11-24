@@ -42,6 +42,7 @@ enum class Action {
     Select,
     Back,
     ToggleTheme,
+    Cast, // mandar a la tele (o dejar de mandar)
 };
 
 /**

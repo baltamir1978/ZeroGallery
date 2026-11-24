@@ -8,7 +8,9 @@
 #include "media_player.h"
 #include "orientation_sensor.h"
 
+#include <array>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace screen {
@@ -19,6 +21,10 @@ namespace screen {
  *
  * Mientras está abierta mira el acelerómetro: al girar el aparato, la foto o el vídeo y los
  * rótulos giran con él. La lista de carpetas no gira: se maneja con el teclado delante.
+ *
+ * Mandando a la tele (V), la lista de teles se pinta aquí encima, sin girar (se maneja
+ * con el teclado), y el aviso del centro cuenta cómo va en la tele. Un vídeo que está en la
+ * tele no se reproduce aquí: la CM0 no tiene que decodificar nada.
  */
 class ViewerScreen : public BaseScreen {
 public:
@@ -35,10 +41,15 @@ private:
     void hide_status();
     /** Coloca y gira el rótulo y el aviso para como está el aparato. */
     void place_overlays();
+    void build_picker(lv_obj_t* content);
+    void update_picker();
+    /** Aviso de cómo va la tele. Devuelve si se está mandando (y el aviso es suyo). */
+    bool poll_cast();
 
     static void media_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void playback_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void seek_observer(lv_observer_t* observer, lv_subject_t* subject);
+    static void cast_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void poll_timer_cb(lv_timer_t* timer);
 
     std::unique_ptr<platform::MediaPlayer> player_;
@@ -62,6 +73,25 @@ private:
     long seek_caption_second_{-1};
     uint32_t loading_since_{0};
     uint32_t caption_since_{0};
+
+    // Tele
+    bool tv_video_{false};        // el vídeo señalado está en la tele, no aquí
+    bool cast_status_{false};     // el aviso del centro es de la tele
+    std::string cast_text_;
+    const char* cast_icon_{nullptr};
+    platform::CastState cast_seen_{platform::CastState::Off};
+    uint32_t cast_state_since_{0};
+    lv_obj_t* picker_{nullptr};
+    lv_obj_t* picker_title_{nullptr};
+    lv_obj_t* picker_hint_{nullptr};
+    std::array<lv_obj_t*, 4> picker_rows_{};
+    uint32_t picker_version_seen_{0};
+    bool picker_searching_seen_{false};
+    uint32_t picker_opened_{0};
+    bool picker_was_open_{false};
+    bool picker_empty_hint_{false};
+    int32_t picker_drawn_selection_{-1};
+    int32_t picker_drawn_dark_{-1};
 };
 
 } // namespace screen

@@ -127,6 +127,9 @@ Action action_for_key(uint32_t key) {
         case 't':
         case 'T':
             return Action::ToggleTheme;
+        case 'v':
+        case 'V':
+            return Action::Cast;
         default:
             return Action::None;
     }

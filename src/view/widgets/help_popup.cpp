@@ -32,9 +32,9 @@ constexpr std::array<HelpRow, 5> kBrowserRows = {{
 
 constexpr std::array<HelpRow, 5> kViewerRows = {{
     {", / .", "Previous / next"},
-    {"Z / C", "Video -10 / +10 s"},
-    {"X / F", "Video -30 / +30 s"},
+    {"Z/C  X/F", "Video -/+10 s, -/+30 s"},
     {"ENTER", "Pause / play video"},
+    {"V", "Send to TV / stop"},
     {"ESC", "Back (hold: exit)"},
 }};
 

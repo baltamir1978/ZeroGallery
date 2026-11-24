@@ -6,7 +6,7 @@
 
 cmake_minimum_required(VERSION 3.31)
 
-project(zerogallery VERSION 0.3.1 LANGUAGES C CXX)
+project(zerogallery VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -639,6 +639,10 @@ if(USE_DESKTOP)
     add_executable(gallery_test tests/gallery_test.cpp)
     target_link_libraries(gallery_test PRIVATE ${PROJECT_NAME}_model)
     add_test(NAME gallery_test COMMAND gallery_test)
+    add_executable(dlna_test tests/dlna_test.cpp)
+    target_link_libraries(dlna_test PRIVATE ${PROJECT_NAME}_model)
+    target_compile_definitions(dlna_test PRIVATE FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    add_test(NAME dlna_test COMMAND dlna_test)
 endif()
 
 # Package deb
