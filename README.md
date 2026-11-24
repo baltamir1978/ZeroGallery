@@ -2,6 +2,9 @@
 
 Galería de fotos y vídeos para el [M5Stack Cardputer Zero](https://docs.m5stack.com/): se elige
 una carpeta y se pasan sus fotos y vídeos a pantalla completa con las flechas del teclado.
+Con `V`, lo que se está viendo **sale en la tele** —una Smart TV por DLNA (LG, Samsung, Sony,
+Hisense…) o un Chromecast, Google TV o Nest Hub por Google Cast— y se sigue manejando desde el
+Cardputer.
 
 <p>
   <img src="screenshot/folders.png" alt="Lista de una carpeta" width="320" />
@@ -39,8 +42,9 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
 
 ## Mandar a la tele
 
-Con una foto o un vídeo delante, `V` busca las teles de la red (DLNA y Google Cast) y las lista; `Enter` manda lo
-que se está viendo a la señalada. Desde ese momento, pasar de foto o de vídeo lo cambia
+Con una foto o un vídeo delante, `V` busca las teles de la red y las lista (las DLNA con su
+nombre; los aparatos Google Cast, con el modelo entre paréntesis). `Enter` manda lo que se está
+viendo a la señalada; la última usada sale ya señalada la próxima vez. Desde ese momento, pasar de foto o de vídeo lo cambia
 también en la tele, y en un vídeo las flechas saltan y `Enter` pausa **en la tele**. Arriba a
 la izquierda el rótulo lleva delante `TV` mientras se está mandando. Otra `V` (también desde la
 lista de carpetas) deja de mandar y para la tele; salir de la app también la para.
@@ -53,15 +57,19 @@ lista de carpetas) deja de mandar y para la tele; salir de la app también la pa
   (PNG, HEIC, WebP, GIF…), los JPEG progresivos, en CMYK, de más de 4096 px o con la orientación
   en el EXIF (las de móvil) se convierten antes a un JPEG derecho de hasta 4K con `ffmpeg`; es
   lo que tarda un par de segundos más. El resto va tal cual.
-- **Vídeos** van tal cual: si la tele no sabe abrir un formato, lo dice ella. Antes de mandar se
-  le pregunta qué tipos acepta; un MOV de iPhone (que por dentro es MP4) se le anuncia como MP4,
-  que es como lo aceptan LG, Samsung y Sony.
-- Tienen que estar **en la misma red** (Wi-Fi o cable de casa): las teles se encuentran por
-  multicast, que no pasa por Tailscale. Para una red sin multicast, `ZEROGALLERY_TV=<url de la
-  descripción de la tele>` la añade a mano; `ZEROGALLERY_DLNA_DEBUG=1` cuenta en el terminal
-  todo lo que pasa.
+- **Vídeos** van tal cual: si la tele no sabe abrir un formato, lo dice ella (y el Cardputer lo
+  enseña). A una tele DLNA se le pregunta antes qué tipos acepta; un MOV de iPhone (que por
+  dentro es MP4) se le anuncia como MP4, que es como lo aceptan LG, Samsung, Sony y Chromecast.
+- **Google Cast** abre en el aparato el reproductor de Google (el mismo que usan muchas apps
+  del móvil para «enviar») y le pasa la dirección del fichero; al dejar de mandar se cierra y el
+  aparato vuelve a su pantalla de reposo. La conexión va cifrada (TLS) con el `libssl` del
+  sistema, que el Cardputer ya trae.
+- Tienen que estar **en la misma red** (Wi-Fi o cable de casa): las teles se buscan por
+  multicast (SSDP para DLNA, mDNS para Cast), que no pasa por Tailscale. Para una red sin
+  multicast se puede dar a mano: `ZEROGALLERY_TV=<url de la descripción DLNA>` o
+  `ZEROGALLERY_CAST=<ip>`. `ZEROGALLERY_DLNA_DEBUG=1` cuenta en el terminal todo lo que pasa.
 
-Lo que pide cada marca (DLNA es un estándar, pero cada una lo pone a su manera):
+Lo que pide cada aparato (DLNA es un estándar, pero cada marca lo pone a su manera):
 
 | Tele | Qué hacer | Probado |
 |---|---|---|
