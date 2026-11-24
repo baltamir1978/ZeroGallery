@@ -33,12 +33,13 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
 - **Sonido** por PipeWire (el servidor de sonido del aparato): suena por donde esté saliendo
   el sonido del sistema —altavoz, auriculares o Bluetooth— y con su volumen. Si un vídeo no
   tiene sonido o no hay salida, se reproduce sólo la imagen.
-- **Mandar a la tele** (`V`) por DLNA: lo que se está viendo sale en la tele, a su resolución
-  y con su sonido, y se sigue manejando desde el Cardputer (ver abajo).
+- **Mandar a la tele** (`V`) por DLNA o Google Cast (Chromecast, Google TV, Nest Hub): lo que
+  se está viendo sale en la tele, a su resolución y con su sonido, y se sigue manejando desde
+  el Cardputer (ver abajo).
 
 ## Mandar a la tele
 
-Con una foto o un vídeo delante, `V` busca las teles de la red y las lista; `Enter` manda lo
+Con una foto o un vídeo delante, `V` busca las teles de la red (DLNA y Google Cast) y las lista; `Enter` manda lo
 que se está viendo a la señalada. Desde ese momento, pasar de foto o de vídeo lo cambia
 también en la tele, y en un vídeo las flechas saltan y `Enter` pausa **en la tele**. Arriba a
 la izquierda el rótulo lleva delante `TV` mientras se está mandando. Otra `V` (también desde la
@@ -67,7 +68,8 @@ Lo que pide cada marca (DLNA es un estándar, pero cada una lo pone a su manera)
 | LG (webOS) | Nada. Tarda 3-4 s en enseñar una foto; un vídeo ya visto lo sigue donde se dejó | Sí: 50UK6500PLA (2018) |
 | Samsung (Tizen) | La primera vez pregunta en la tele si se deja conectar: **Permitir**. Si se dijo que no: Ajustes → General → Administrador de dispositivos externos → Administrador de conexión → Lista de dispositivos | No |
 | Sony Bravia | Ajustes → Red → Red doméstica → **Renderizador** activado, y el Cardputer permitido en su control de acceso | No |
-| Hisense (VIDAA) | Ajustes → Red (o Sistema) → **Compartir contenido** activado. Las Hisense con Google TV pueden no tener DLNA (sólo Chromecast) | No |
+| Hisense (VIDAA) | Ajustes → Red (o Sistema) → **Compartir contenido** activado | No |
+| Google Cast: Chromecast, Google TV, Nest Hub (y teles con Chromecast integrado) | Nada. Sale en la lista con su nombre y el modelo entre paréntesis, «Salón (Chromecast HD)». Se usa el reproductor de Google, que abre MP4, WebM, MKV (según el códec), MP3, AAC, FLAC, OGG, WAV y JPEG/PNG/GIF/WebP: lo demás no lo reproduce | Sí, en un Google Nest Hub: foto, vídeo, saltos, pausa, volumen. Chromecast HD, sin probar |
 
 ## Teclas
 
@@ -128,8 +130,10 @@ LVGL y, para el aparato, el *sysroot* de M5Stack a `.cache/`.
 src/model/gallery.*          lógica sin LVGL: listar, ordenar, navegar, encajar, EXIF, teclas
 src/viewmodel/               qué hace cada tecla en cada pantalla; avisa a las vistas
 src/platform/media_player.*  hilo que decodifica (libjpeg) y maneja ffmpeg
-src/platform/dlna_caster.*   tele: búsqueda SSDP, servidor HTTP de ficheros y órdenes SOAP
+src/platform/dlna_caster.*   tele: búsqueda (SSDP y mDNS), servidor HTTP de ficheros y órdenes
+src/platform/google_cast.*   conexión Google Cast (TLS con el libssl del sistema)
 src/model/dlna.*             DLNA sin red: respuestas, descripciones, SOAP, tipos, cabeceras
+src/model/gcast.*            Google Cast sin red: mDNS, mensajes protobuf, JSON, peticiones
 src/platform/linux_input.*   teclado (evdev) y repetición de flechas
 src/view/screens/            lista de carpeta (browser) y visor a pantalla completa (viewer)
 src/app/                     arranque, ESC corto/largo, simulador de escritorio
@@ -146,6 +150,10 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.5.0 (24-nov-2026)** — Google Cast: los Chromecast, Google TV y Nest Hub salen en la misma
+lista de `V` y funcionan como una tele DLNA. Probado con un Google Nest Hub (el mismo código,
+desde otra máquina de esa red). Un Chromecast con Google TV, sin probar.
 
 **0.4.1 (24-nov-2026)** — el código de DLNA es el mismo que usa la versión propia de Music para
 oír la música en la tele. Sin cambios a la vista.

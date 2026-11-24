@@ -270,6 +270,12 @@ DlnaCaster::~DlnaCaster() {
         worker_.join();
     }
     // Que la tele no se quede esperando un fichero que ya nadie sirve.
+    if (google_) {
+        if (active_) {
+            google_->stop_app();
+        }
+        google_->close();
+    }
     if (active_ && !current_.tv.av_transport.empty()) {
         std::string response;
         int upnp_error = 0;
@@ -348,6 +354,41 @@ void DlnaCaster::discovery_loop() {
         add_from(manual);
     }
 
+    // Aparatos Google Cast: se añaden (o se ponen al día, si cambian de IP) por su id.
+    std::vector<gcast::Device> cast_devices;
+    const auto add_cast = [&](const gcast::Device& device) {
+        dlna::Renderer tv;
+        tv.name = device.model.empty() ? device.name : device.name + " (" + device.model + ")";
+        tv.manufacturer = "Google";
+        tv.model = device.model;
+        tv.udn = "cast:" + device.id;
+        tv.cast_host = device.host;
+        tv.cast_port = device.port;
+        std::lock_guard<std::mutex> lock(renderers_mutex_);
+        const auto known = std::find_if(renderers_.begin(), renderers_.end(),
+                                        [&](const dlna::Renderer& r) { return r.udn == tv.udn; });
+        if (known == renderers_.end()) {
+            debug("Cast: %s en %s:%d", tv.name.c_str(), tv.cast_host.c_str(), tv.cast_port);
+            renderers_.push_back(tv);
+            ++renderers_version_;
+        }
+        else if (known->cast_host != tv.cast_host || known->cast_port != tv.cast_port) {
+            *known = tv;
+            ++renderers_version_;
+        }
+    };
+    // ZEROGALLERY_CAST=ip[:puerto] añade un Chromecast a mano (redes sin multicast, pruebas).
+    if (const char* manual = std::getenv("ZEROGALLERY_CAST"); manual && manual[0]) {
+        gcast::Device device;
+        std::string text = manual;
+        const auto colon = text.find(':');
+        device.host = text.substr(0, colon);
+        device.port = colon == std::string::npos ? gcast::kCastPort : std::atoi(text.c_str() + colon + 1);
+        device.name = "Chromecast " + device.host;
+        device.id = text;
+        add_cast(device);
+    }
+
     // Un socket por interfaz con multicast (wlan0, eth0…): así la búsqueda sale por todas
     // y no sólo por la de la ruta por defecto. Tailscale no tiene multicast y no cuenta.
     std::vector<int> sockets;
@@ -389,6 +430,10 @@ void DlnaCaster::discovery_loop() {
     group.sin_family = AF_INET;
     group.sin_port = htons(1900);
     inet_pton(AF_INET, "239.255.255.250", &group.sin_addr);
+    sockaddr_in mdns_group{};
+    mdns_group.sin_family = AF_INET;
+    mdns_group.sin_port = htons(gcast::kMdnsPort);
+    inet_pton(AF_INET, gcast::kMdnsGroup, &mdns_group.sin_addr);
 
     while (true) {
         {
@@ -403,6 +448,9 @@ void DlnaCaster::discovery_loop() {
                 const std::string request = dlna::msearch_request(target);
                 ::sendto(fd, request.data(), request.size(), 0, reinterpret_cast<sockaddr*>(&group), sizeof(group));
             }
+            // mDNS desde este mismo puerto (no el 5353): los aparatos contestan aquí mismo.
+            const std::string query = gcast::mdns_query();
+            ::sendto(fd, query.data(), query.size(), 0, reinterpret_cast<sockaddr*>(&mdns_group), sizeof(mdns_group));
         }
         const uint32_t round_end = now_ms() + kSearchPeriodMs;
         while (discovering_ && now_ms() < round_end) {
@@ -417,13 +465,26 @@ void DlnaCaster::discovery_loop() {
                 if (!(pfd.revents & POLLIN)) {
                     continue;
                 }
-                char buffer[2048];
-                const ssize_t got = ::recv(pfd.fd, buffer, sizeof(buffer) - 1, 0);
+                char buffer[9000];
+                sockaddr_in from{};
+                socklen_t from_length = sizeof(from);
+                const ssize_t got = ::recvfrom(pfd.fd, buffer, sizeof(buffer) - 1, 0,
+                                               reinterpret_cast<sockaddr*>(&from), &from_length);
                 if (got <= 0) {
                     continue;
                 }
                 std::string location;
                 std::string usn;
+                char from_ip[INET_ADDRSTRLEN] = {};
+                inet_ntop(AF_INET, &from.sin_addr, from_ip, sizeof(from_ip));
+                cast_devices.clear();
+                if (gcast::parse_mdns_response(reinterpret_cast<const uint8_t*>(buffer), static_cast<size_t>(got),
+                                               from_ip, cast_devices)) {
+                    for (const auto& device : cast_devices) {
+                        add_cast(device);
+                    }
+                    continue;
+                }
                 if (dlna::parse_ssdp_response(std::string_view(buffer, static_cast<size_t>(got)), location, usn)) {
                     add_from(location);
                 }
@@ -452,7 +513,7 @@ void DlnaCaster::cast(const dlna::Renderer& tv, const CastMedia& media) {
             volume_ = -1;
             muted_ = false;
             volume_dirty_ = mute_dirty_ = false;
-            volume_wanted_ = !tv.rendering_control.empty();
+            volume_wanted_ = !tv.rendering_control.empty() || tv.is_cast();
         }
         wanted_.generation += 1;
         wanted_.tv = tv;
@@ -494,7 +555,8 @@ void DlnaCaster::pause() {
 void DlnaCaster::set_next(const CastMedia& media) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!active_ || wanted_.tv.udn == next_unsupported_udn_) {
+        // Cast no tiene «la siguiente» como DLNA: se manda al acabar (tarda poco).
+        if (!active_ || wanted_.tv.udn == next_unsupported_udn_ || wanted_.tv.is_cast()) {
             return;
         }
         next_wanted_ = media;
@@ -532,7 +594,7 @@ int DlnaCaster::change_volume(int delta) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (volume_ < 0) {
-            volume_wanted_ = !wanted_.tv.rendering_control.empty();
+            volume_wanted_ = !wanted_.tv.rendering_control.empty() || wanted_.tv.is_cast();
         }
         else {
             volume_ = std::clamp(volume_ + delta, 0, 100);
@@ -812,7 +874,11 @@ bool DlnaCaster::convert_photo(uint64_t generation, const std::string& path, int
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
-bool DlnaCaster::prepare(const Job& job, std::string& url, std::string& metadata) {
+bool DlnaCaster::prepare(const Job& job,
+                         std::string& url,
+                         std::string& metadata,
+                         std::string* mime_out,
+                         dlna::ItemInfo* item_out) {
     const uint64_t generation = job.generation;
     const CastMedia& media = job.media;
     const std::string name = std::filesystem::path(media.path).filename().string();
@@ -822,7 +888,14 @@ bool DlnaCaster::prepare(const Job& job, std::string& url, std::string& metadata
     std::string profile;
     const dlna::MediaClass media_class = media.media_class;
 
-    if (media_class == dlna::MediaClass::Video) {
+    if (job.tv.is_cast() && media_class != dlna::MediaClass::Photo) {
+        // El reproductor de Google tiene su propia lista de tipos (un MOV va como MP4).
+        served.mime = gcast::cast_mime(name);
+        if (served.mime.empty()) {
+            served.mime = dlna::choose_mime(name, "");
+        }
+    }
+    else if (media_class == dlna::MediaClass::Video) {
         served.mime = dlna::choose_mime(name, sink_);
     }
     else if (media_class == dlna::MediaClass::Audio) {
@@ -878,7 +951,13 @@ bool DlnaCaster::prepare(const Job& job, std::string& url, std::string& metadata
         return false;
     }
     dlna::Url tv_url;
-    dlna::parse_url(job.tv.av_transport, tv_url);
+    if (job.tv.is_cast()) {
+        tv_url.host = job.tv.cast_host;
+        tv_url.port = job.tv.cast_port;
+    }
+    else {
+        dlna::parse_url(job.tv.av_transport, tv_url);
+    }
     const std::string address = local_address_towards(tv_url.host, tv_url.port);
     if (address.empty()) {
         fail(generation, "No network to reach the TV");
@@ -902,6 +981,12 @@ bool DlnaCaster::prepare(const Job& job, std::string& url, std::string& metadata
         item.cover_url = origin + "/m/" + add_served(std::move(cover)) + "/" + cover_name;
     }
     const std::string mime = served.mime;
+    if (mime_out) {
+        *mime_out = mime;
+    }
+    if (item_out) {
+        *item_out = item;
+    }
     const std::string token = add_served(std::move(served));
     url = origin + "/m/" + token + "/" + url_name;
     metadata = dlna::didl_metadata(item, url, mime, media_class, profile, size);
@@ -918,6 +1003,11 @@ void DlnaCaster::do_cast(const Job& job) {
     poll_failures_ = 0;
     const CastMedia& media = job.media;
     debug("mandando %s a %s", media.path.c_str(), job.tv.name.c_str());
+
+    if (job.tv.is_cast()) {
+        cast_google(job);
+        return;
+    }
 
     // Qué tipos dice aceptar esta tele: se pregunta una vez por tele.
     if (sink_udn_ != job.tv.udn) {
@@ -997,6 +1087,103 @@ void DlnaCaster::do_cast(const Job& job) {
     set_state(job.playable() ? CastState::Playing : CastState::Showing);
 }
 
+void DlnaCaster::cast_google(const Job& job) {
+    const uint64_t generation = job.generation;
+    if (!google_) {
+        google_ = std::make_unique<GoogleCast>();
+    }
+    if (!google_->connect(job.tv.cast_host, job.tv.cast_port)) {
+        fail(generation, "Can't reach the Chromecast");
+        return;
+    }
+    std::string error;
+    if (!google_->ensure_media_app(error)) {
+        fail(generation, error);
+        return;
+    }
+    if (superseded(generation)) {
+        return;
+    }
+    std::string url;
+    std::string metadata;
+    std::string mime;
+    dlna::ItemInfo item;
+    if (!prepare(job, url, metadata, &mime, &item)) {
+        return;
+    }
+    gcast::LoadInfo info;
+    info.url = url;
+    info.mime = mime;
+    switch (job.media.media_class) {
+        case dlna::MediaClass::Photo: info.kind = gcast::MediaKind::Photo; break;
+        case dlna::MediaClass::Video: info.kind = gcast::MediaKind::Video; break;
+        case dlna::MediaClass::Audio: info.kind = gcast::MediaKind::Audio; break;
+    }
+    info.title = item.title;
+    info.artist = item.artist;
+    info.album = item.album;
+    info.cover_url = item.cover_url;
+    debug("LOAD %s (%s) en %s", url.c_str(), mime.c_str(), job.tv.name.c_str());
+    if (!google_->load(info, error)) {
+        if (!superseded(generation)) {
+            fail(generation, error);
+        }
+        return;
+    }
+    if (superseded(generation)) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        reached_playing_ = false;
+        if (job.media.duration > 0) {
+            duration_ = job.media.duration;
+        }
+    }
+    debug("en el Chromecast");
+    set_state(job.playable() ? CastState::Playing : CastState::Showing);
+}
+
+void DlnaCaster::poll_google(const Job& job) {
+    if (!google_ || !google_->connected()) {
+        fail(job.generation, "Lost the Chromecast");
+        return;
+    }
+    google_->request_media_status();
+    if (superseded(job.generation)) {
+        return;
+    }
+    const auto media = google_->media_status();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (media.player_state == "PLAYING") {
+        reached_playing_ = true;
+        set_state(CastState::Playing);
+    }
+    else if (media.player_state == "PAUSED") {
+        set_state(CastState::Paused);
+    }
+    else if (media.player_state == "IDLE" && state_ != CastState::Stopped) {
+        if (media.idle_reason == "ERROR") {
+            error_ = "The Chromecast can't play this";
+            state_ = CastState::Error;
+            return;
+        }
+        // FINISHED es que ha llegado al final; CANCELLED o INTERRUPTED, que lo han parado
+        // (desde el mando, otra app…), y entonces no toca la siguiente.
+        if (reached_playing_ || now_ms() - cast_started_ms_ > kStartGraceMs) {
+            if (media.idle_reason == "FINISHED" && reached_playing_) {
+                finished_ = true;
+                debug("ha acabado");
+            }
+            set_state(CastState::Stopped);
+        }
+    }
+    position_ = google_->position();
+    if (media.duration > 0) {
+        duration_ = media.duration;
+    }
+}
+
 void DlnaCaster::poll_tv() {
     Job job;
     {
@@ -1005,6 +1192,10 @@ void DlnaCaster::poll_tv() {
     }
     const auto state = state_.load();
     if (!job.playable() || state == CastState::Error || state == CastState::Off) {
+        return;
+    }
+    if (job.tv.is_cast()) {
+        poll_google(job);
         return;
     }
     std::string response;
@@ -1147,16 +1338,19 @@ void DlnaCaster::do_toggle() {
     std::string response;
     int upnp_error = 0;
     const auto state = state_.load();
+    const bool google = job.tv.is_cast() && google_ && google_->connected();
     if (state == CastState::Playing) {
-        if (soap(job.tv.av_transport, dlna::kAvTransportService, "Pause", dlna::instance_arguments(), response,
-                 upnp_error)) {
+        if (google ? google_->pause()
+                   : soap(job.tv.av_transport, dlna::kAvTransportService, "Pause", dlna::instance_arguments(),
+                          response, upnp_error)) {
             set_state(CastState::Paused);
         }
         return;
     }
     if (state == CastState::Paused) {
-        if (soap(job.tv.av_transport, dlna::kAvTransportService, "Play", dlna::play_arguments(), response,
-                 upnp_error)) {
+        if (google ? google_->play()
+                   : soap(job.tv.av_transport, dlna::kAvTransportService, "Play", dlna::play_arguments(), response,
+                          upnp_error)) {
             set_state(CastState::Playing);
         }
         return;
@@ -1178,6 +1372,20 @@ void DlnaCaster::do_seek(double delta) {
         }
     }
     if (!job.playable()) {
+        return;
+    }
+    if (job.tv.is_cast()) {
+        if (!google_ || !google_->connected()) {
+            return;
+        }
+        const double target = dlna::seek_target(google_->position(), delta, duration_);
+        if (google_->seek(target)) {
+            position_ = target;
+        }
+        else {
+            std::lock_guard<std::mutex> lock(mutex_);
+            notice_ = "The Chromecast can't seek here";
+        }
         return;
     }
     std::string response;
@@ -1229,6 +1437,29 @@ void DlnaCaster::do_volume() {
         get = volume_wanted_;
         volume_dirty_ = mute_dirty_ = volume_wanted_ = false;
     }
+    if (job.tv.is_cast()) {
+        // Volumen del aparato Cast (0..1 en su lado).
+        if (!google_ || !google_->connected()) {
+            return;
+        }
+        if (set_mute) {
+            google_->set_muted(muted);
+        }
+        if (set_volume && volume >= 0) {
+            google_->set_volume(volume / 100.0);
+        }
+        if (get && google_->request_receiver_status()) {
+            const auto status = google_->receiver_status();
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (status.volume >= 0 && !volume_dirty_) {
+                volume_ = static_cast<int>(status.volume * 100 + 0.5);
+            }
+            if (!mute_dirty_) {
+                muted_ = status.muted;
+            }
+        }
+        return;
+    }
     const std::string& url = job.tv.rendering_control;
     if (url.empty()) {
         return;
@@ -1268,6 +1499,10 @@ void DlnaCaster::do_volume() {
 void DlnaCaster::do_stop() {
     Job job = current_;
     current_ = Job{};
+    if (google_) {
+        google_->stop_app();
+        google_->close();
+    }
     if (!job.tv.av_transport.empty()) {
         std::string response;
         int upnp_error = 0;

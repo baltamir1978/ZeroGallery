@@ -104,6 +104,22 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   `Play` se reintenta si contesta 701 y `SetAVTransportURI` se repite tras un `Stop` si falla
   (Samsung). Las fotos se convierten a JPEG secuencial, derecho y de hasta 4K
   (`dlna::photo_needs_conversion`): el EXIF lo respetan unas teles sí y otras no.
+- **Google Cast (0.5.0) va dentro del mismo `DlnaCaster`**: un Chromecast es un
+  `dlna::Renderer` con `cast_host`/`cast_port`, y cada orden va por SOAP o por Cast según
+  `is_cast()`; la lista, `V` y el servidor de ficheros son los mismos. `model/gcast.*` (sin red,
+  con pruebas y una respuesta mDNS real de un Nest Hub) y `platform/google_cast.*` (conexión).
+  Decisiones: **TLS con el `libssl.so.3` del sistema cargado con `dlopen`** (sin cabeceras ni
+  dependencia en el `.deb`; si no está, Cast no sale y DLNA sigue), el certificado del aparato no
+  se comprueba (es propio, como hacen todos); **un solo hilo lee y escribe** la conexión
+  (OpenSSL no admite dos a la vez); búsqueda mDNS «legacy unicast» desde el mismo socket que
+  SSDP, sin unirse al grupo; app CC1AD845 (el reproductor de Google). Cast no encadena la
+  siguiente canción (`set_next` no hace nada): Music la manda al acabar. `ZEROGALLERY_CAST=ip`
+  añade uno a mano.
+- **Probar Cast sin ir a la granja**: `granja-pi` (Tailscale) está en su Wi-Fi, es aarch64 con
+  Debian 13 como el Cardputer y tiene libssl (no ffmpeg). Allí hay dos Google Nest Hub
+  («Cocina» y «Salón»); el Chromecast HD de la tele suele estar apagado. Se compila un
+  programa de prueba con `dlna_caster` + `google_cast` y se lanza en `granja-pi`; el volumen del
+  Nest se apunta, se baja y se devuelve. Así se probó la 0.5.0.
 - **Con un vídeo en la tele, aquí no se reproduce** (se cierra el ffmpeg local): ahorra CPU y
   batería. Al dejar de mandar, el visor lo vuelve a abrir.
 - **El cortafuegos del portátil (`ufw`) no deja probar con la tele desde el PC**: se come las
@@ -135,11 +151,17 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   escritorio HDMI (lightdm) está apagado en `cpzero` y se recomendó `gpu_mem=16`, que no
   bastaría para la decodificación por hardware. Bruno dice que no usa HDMI: por eso va detrás
   de DLNA.
+- **Probar Cast en el Chromecast HD (Google TV) de la granja**: con el Nest Hub funciona todo,
+  pero el Chromecast no se ha visto nunca encendido (Bruno lo probará allí).
 - **Probar en Samsung, Sony y Hisense** (teles de amigos de Bruno): están los arreglos
   conocidos, pero sólo se ha probado en la LG.
 
 ## Estado
 
+- **0.5.0 (24-nov-2026)**: Google Cast. Probado con un Google Nest Hub de la granja desde
+  `granja-pi` (búsqueda, foto, música con carátula y su final, vídeo, saltar, pausa, volumen);
+  la LG sigue igual (probado desde el aparato). **Sin probar por Bruno** y sin probar en el
+  Chromecast HD.
 - **0.4.1 (24-nov-2026)**: los ficheros de DLNA, generalizados para compartirlos con Music
   (audio, volumen, siguiente canción) y sin depender de `gallery`. Para la galería no cambia
   nada; comprobado desde el aparato con la LG (foto girada y vídeo).

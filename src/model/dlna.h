@@ -61,6 +61,11 @@ struct Renderer {
     std::string av_transport; // URL de control del servicio AVTransport, ya absoluta
     std::string connection_manager; // URL de control de ConnectionManager (puede faltar)
     std::string rendering_control;  // URL de control de RenderingControl: el volumen (puede faltar)
+    // Google Cast (Chromecast, Google TV, Nest Hub): no es DLNA, pero se elige en la misma
+    // lista. Con cast_port > 0 lo de arriba no cuenta (salvo name, model y udn).
+    std::string cast_host;
+    int cast_port{0};
+    bool is_cast() const { return cast_port > 0; }
 };
 
 /**

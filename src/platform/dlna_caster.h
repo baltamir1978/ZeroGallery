@@ -5,6 +5,7 @@
 #pragma once
 
 #include "dlna.h"
+#include "google_cast.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -159,7 +160,14 @@ private:
      * Deja `job` servido (convirtiendo la foto si hace falta) y prepara su URL y sus
      * metadatos. `false` si falla (ya avisado con fail) o si se ha pedido otra cosa.
      */
-    bool prepare(const Job& job, std::string& url, std::string& metadata);
+    bool prepare(const Job& job,
+                 std::string& url,
+                 std::string& metadata,
+                 std::string* mime = nullptr,
+                 dlna::ItemInfo* item_out = nullptr);
+    // Lo mismo por Google Cast (el aparato es un Chromecast, Google TV o Nest Hub)
+    void cast_google(const Job& job);
+    void poll_google(const Job& job);
     void do_toggle();
     void do_seek(double delta);
     void do_stop();
@@ -224,6 +232,7 @@ private:
     std::string sink_udn_;
     std::string sink_;
     std::thread worker_;
+    std::unique_ptr<GoogleCast> google_; // sólo desde el hilo worker_
 
     // Servidor de ficheros
     std::mutex served_mutex_;
