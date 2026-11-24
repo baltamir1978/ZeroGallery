@@ -150,7 +150,7 @@ tests/                       pruebas de src/model (con la descripción real de u
 **0.4.0 (24-nov-2026)** — mandar a la tele por DLNA con `V`. Probado desde el Cardputer con
 una LG webOS de 2018: fotos (también PNG convertida y JPEG girado por EXIF, que llega derecho),
 un MOV, saltos, pausa, cambiar de fichero, dejar de mandar y salir de la app con la tele en
-marcha. Samsung, Sony y Hisense, sin probar: van por el estándar con los arreglos conocidos de
+marcha; comprobado también en el aparato. Samsung, Sony y Hisense, sin probar: van por el estándar con los arreglos conocidos de
 cada una.
 
 **0.1.0 (16-nov-2026)** — primera versión. Probada en el simulador de escritorio: carpetas

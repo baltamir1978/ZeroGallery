@@ -140,7 +140,8 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   con EXIF 6 (llega derecho a 1600×1200), MOV anunciado como MP4, saltos de ±10 s, pausa y
   reanudar, pasar de foto a vídeo, dejar de mandar (el vídeo vuelve a verse aquí) y salir con
   la tele en marcha (se queda en `STOPPED`; la app sale en 1,5 s). Ficha de la tienda: permiso
-  `network`. **Sin probar por Bruno** en el aparato ni en Samsung, Sony o Hisense.
+  `network`. **Bruno lo confirma con su LG (24-nov-2026: «ha funcionado perfecto»)**; sin probar
+  en Samsung, Sony o Hisense.
 - **Probada en el aparato (24-nov-2026):** Bruno la da por buena («zerogallery ok»), con la 0.3.1.
 
 - **0.3.1 (20-nov-2026)**: la app ya no tiene **un núcleo al 100 %** en el aparato. Sin
