@@ -19,6 +19,17 @@
 
 namespace platform {
 
+/** Lo que se manda: el fichero y lo que la tele enseña de él. */
+struct CastMedia {
+    std::string path;
+    dlna::MediaClass media_class{dlna::MediaClass::Photo};
+    std::string title;      // vacío: el nombre del fichero
+    std::string artist;
+    std::string album;
+    std::string cover_path; // carátula (JPEG o PNG), si hay
+    double duration{0};     // segundos, si se saben: por si la tele no lo dice
+};
+
 enum class CastState {
     Off,      // no se está mandando nada
     Sending,  // preparando el fichero o esperando a que la tele lo coja
@@ -39,7 +50,10 @@ enum class CastState {
  *   (con una ruta imposible de adivinar), con trozos (Range) y las cabeceras DLNA que piden
  *   las teles. Sólo existe mientras se está mandando algo.
  * - Fotos que no son un JPEG corriente: se convierten antes con ffmpeg (ver
- *   dlna::photo_needs_conversion). Los vídeos van tal cual: decodifica la tele.
+ *   dlna::photo_needs_conversion). Vídeos y música van tal cual: decodifica la tele.
+ * - Volumen de la tele (RenderingControl), si lo tiene.
+ *
+ * Es el mismo fichero en ZeroGallery y en el fork de Music.
  *
  * ZEROGALLERY_TV=<url de la descripción> añade una tele a mano, para redes sin multicast
  * (Tailscale) o pruebas. ZEROGALLERY_DLNA_DEBUG=1 cuenta lo que pasa por stderr.
@@ -61,10 +75,25 @@ public:
     /** Cambia cada vez que cambia la lista. */
     uint32_t renderers_version() const;
 
-    /** Manda `path` a `tv`. Lo que se estuviera mandando se abandona. */
+    /** Manda `media` a `tv`. Lo que se estuviera mandando se abandona. */
+    void cast(const dlna::Renderer& tv, const CastMedia& media);
+    /** Atajo para una foto o un vídeo sin más datos. */
     void cast(const dlna::Renderer& tv, const std::string& path, bool video);
-    /** Vídeo: pausa, reanuda o, si había acabado, vuelve a empezar. */
+    /** Vídeo o música: pausa, reanuda o, si había acabado, vuelve a empezar. */
     void toggle_pause();
+    /** Pausa (sin hacer nada si ya está en pausa o no hay nada en marcha). */
+    void pause();
+    /**
+     * Lo que va después de lo que suena (música): se le da a la tele por adelantado
+     * (SetNextAVTransportURI) para que lo enlace sin hueco. Si la tele no sabe, no pasa nada:
+     * al acabar, take_finished() avisa y se manda lo siguiente como siempre.
+     */
+    void set_next(const CastMedia& media);
+    /**
+     * Si la tele ha pasado sola a lo dado con set_next. Devuelve true una sola vez; desde
+     * entonces eso es «lo que suena» (pausar, saltar…).
+     */
+    bool take_advanced();
     /** Salta en el vídeo; varios saltos seguidos se suman. */
     void seek(double seconds);
     /** Deja de mandar: para la tele y cierra el servidor de ficheros. */
@@ -80,13 +109,26 @@ public:
     double duration() const;
     /** Aviso pasajero (un salto que la tele no quiso hacer…); vacío si no hay. */
     std::string take_notice();
+    /**
+     * Si lo último que se mandó (vídeo o música) ha llegado al final en la tele, y no
+     * porque lo pararan con el mando. Devuelve true una sola vez por cada final.
+     */
+    bool take_finished();
+
+    /** Volumen de la tele (0-100), o -1 si no se sabe (aún, o si no lo deja tocar). */
+    int volume() const;
+    bool muted() const;
+    /** Sube o baja el volumen de la tele; devuelve el nuevo, o -1 si no se sabe. */
+    int change_volume(int delta);
+    /** Quita o pone el silencio; devuelve si queda silenciada. */
+    bool toggle_mute();
 
 private:
     struct Job {
         uint64_t generation{0};
         dlna::Renderer tv;
-        std::string path;
-        bool video{false};
+        CastMedia media;
+        bool playable() const { return media.media_class != dlna::MediaClass::Photo; }
     };
 
     struct Served {
@@ -113,9 +155,16 @@ private:
     void clear_served();
 
     void do_cast(const Job& job);
+    /**
+     * Deja `job` servido (convirtiendo la foto si hace falta) y prepara su URL y sus
+     * metadatos. `false` si falla (ya avisado con fail) o si se ha pedido otra cosa.
+     */
+    bool prepare(const Job& job, std::string& url, std::string& metadata);
     void do_toggle();
     void do_seek(double delta);
     void do_stop();
+    void do_volume();
+    void do_set_next();
     void poll_tv();
     bool superseded(uint64_t generation) const;
     void set_state(CastState state);
@@ -145,7 +194,23 @@ private:
     Job current_;
     uint64_t current_generation_{0};
     int toggles_{0};
+    bool pause_requested_{false};
     double seek_{0.0};
+    int volume_{-1};
+    bool muted_{false};
+    bool volume_dirty_{false}; // hay que mandar volume_ a la tele
+    bool mute_dirty_{false};
+    bool volume_wanted_{false}; // hay que preguntar el volumen
+    bool finished_{false};
+    bool reached_playing_{false}; // la tele llegó a decir PLAYING con lo de ahora
+    // Lo siguiente (sin hueco)
+    CastMedia next_wanted_;
+    bool next_dirty_{false};     // hay que dárselo a la tele
+    std::string next_url_;       // lo que se le dio; vacío si nada
+    CastMedia next_media_;
+    std::string next_unsupported_udn_; // tele que no sabe encadenar
+    bool advanced_{false};
+    uint32_t stopped_since_{0};
     bool stop_requested_{false};
     bool quit_{false};
     bool active_{false};

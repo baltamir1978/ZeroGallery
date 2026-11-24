@@ -90,6 +90,11 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   SSDP por cada interfaz con multicast, un servidor HTTP propio (con `Range`, que las teles
   usan para leer el índice de un MP4 del final del fichero) que sólo vive mientras se manda,
   y órdenes SOAP. Sin librerías: libupnp o gupnp serían más que toda la app.
+- **`dlna.*`, `dlna_caster.*`, `tests/dlna_test.cpp` y `tests/fixtures` son los mismos
+  ficheros que en el fork de Music** (`~/Proyectos/CardputerZero-Music/src/cast`, desde el
+  24-nov-2026): no dependen de nada de la galería. Un arreglo en uno se copia tal cual al otro
+  y se pasan las pruebas de los dos. Lo que sólo usa Music (audio con carátula y artista,
+  volumen, `set_next` para encadenar canciones con `SetNextAVTransportURI`) vive ahí también.
 - **Cosas de las teles que ya se han visto** (no quitarlas sin probar): la LG no contesta a
   `SetAVTransportURI` ni a `Play` hasta que ha abierto el fichero (3-6 s una foto): el tiempo
   máximo de esas dos es 20 s. Cierra la conexión a medias para pedir otro trozo: sin
@@ -135,6 +140,9 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.4.1 (24-nov-2026)**: los ficheros de DLNA, generalizados para compartirlos con Music
+  (audio, volumen, siguiente canción) y sin depender de `gallery`. Para la galería no cambia
+  nada; comprobado desde el aparato con la LG (foto girada y vídeo).
 - **0.4.0 (24-nov-2026)**: mandar a la tele por DLNA (`V`). Probado desde el aparato con la LG
   50UK6500PLA de Bruno: búsqueda (la encuentra en menos de un segundo), PNG convertida, JPEG
   con EXIF 6 (llega derecho a 1600×1200), MOV anunciado como MP4, saltos de ±10 s, pausa y

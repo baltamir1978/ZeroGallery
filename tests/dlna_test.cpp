@@ -90,6 +90,8 @@ void test_lg_description() {
           "http://192.168.1.20:1243/AVTransport/00000000-0000-0000-0000-000000000001/control.xml");
     CHECK(tv.connection_manager ==
           "http://192.168.1.20:1243/ConnectionManager/00000000-0000-0000-0000-000000000001/control.xml");
+    CHECK(tv.rendering_control ==
+          "http://192.168.1.20:1243/RenderingControl/00000000-0000-0000-0000-000000000001/control.xml");
 }
 
 void test_nested_description() {
@@ -120,6 +122,7 @@ void test_nested_description() {
     CHECK(tv.udn == "uuid:tv");
     CHECK(tv.av_transport == "http://10.0.0.9:7676/AVTransport/ctl");
     CHECK(tv.connection_manager == "http://10.0.0.9:7676/ConnectionManager/ctl");
+    CHECK(tv.rendering_control == "http://10.0.0.9:7676/RenderingControl/ctl");
 
     // Un router: sin AVTransport no es una tele.
     CHECK(!dlna::parse_description("<root><device><friendlyName>Router</friendlyName><serviceList><service>"
@@ -291,6 +294,53 @@ void test_soap() {
     CHECK(dlna::seek_target(55, 30, 60) == 59);
 }
 
+void test_audio() {
+    CHECK(dlna::mime_type("01 - Song.MP3") == "audio/mpeg");
+    CHECK(dlna::mime_type("a.flac") == "audio/flac");
+    CHECK(dlna::mime_type("a.m4a") == "audio/mp4");
+    CHECK(dlna::mime_type("a.opus") == "audio/ogg");
+    const std::string lg = read_fixture("lg_webos_sink.txt");
+    // Lo que la LG dice aceptar: MP3 y M4A tal cual, FLAC y OGG con su otro nombre.
+    CHECK(dlna::choose_mime("a.mp3", lg) == "audio/mpeg");
+    CHECK(dlna::choose_mime("a.m4a", lg) == "audio/mp4");
+    CHECK(dlna::choose_mime("a.flac", lg) == "audio/flac");
+    CHECK(dlna::choose_mime("a.ogg", lg) == "audio/x-ogg");
+    CHECK(dlna::choose_mime("a.wav", lg) == "audio/wav");
+    CHECK(dlna::choose_mime("a.flac", "http-get:*:audio/x-flac:*") == "audio/x-flac");
+    CHECK(dlna::audio_profile("audio/mpeg") == "MP3");
+    CHECK(dlna::audio_profile("audio/flac").empty());
+
+    dlna::ItemInfo item;
+    item.title = "Clair de Lune";
+    item.artist = "Debussy & co";
+    item.album = "Suite";
+    item.cover_url = "http://10.0.0.5:8000/m/cc/cover.jpg";
+    const std::string didl = dlna::didl_metadata(item, "http://10.0.0.5:8000/m/aa/a.mp3", "audio/mpeg",
+                                                 dlna::MediaClass::Audio, "MP3", 99);
+    CHECK(didl.find("<upnp:class>object.item.audioItem.musicTrack</upnp:class>") != std::string::npos);
+    CHECK(didl.find("<dc:creator>Debussy &amp; co</dc:creator>") != std::string::npos);
+    CHECK(didl.find("<upnp:artist>Debussy &amp; co</upnp:artist>") != std::string::npos);
+    CHECK(didl.find("<upnp:album>Suite</upnp:album>") != std::string::npos);
+    CHECK(didl.find("<upnp:albumArtURI>http://10.0.0.5:8000/m/cc/cover.jpg</upnp:albumArtURI>") != std::string::npos);
+    CHECK(didl.find("protocolInfo=\"http-get:*:audio/mpeg:DLNA.ORG_PN=MP3;DLNA.ORG_OP=01;") != std::string::npos);
+    // Sin artista ni carátula, esas etiquetas no salen.
+    const std::string bare = dlna::didl_metadata("x", "http://h/x.mp4", "video/mp4", dlna::MediaClass::Video, "", 0);
+    CHECK(bare.find("upnp:artist") == std::string::npos && bare.find("albumArtURI") == std::string::npos);
+    CHECK(bare.find("size=") == std::string::npos);
+
+    // Volumen
+    CHECK(dlna::set_volume_arguments(130) ==
+          "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>100</DesiredVolume>");
+    CHECK(dlna::set_mute_arguments(true).find("<DesiredMute>1</DesiredMute>") != std::string::npos);
+    CHECK(dlna::set_next_uri_arguments("http://h/a&b", "<x/>") ==
+          "<InstanceID>0</InstanceID><NextURI>http://h/a&amp;b</NextURI><NextURIMetaData>&lt;x/&gt;</NextURIMetaData>");
+
+    // ¿Ha acabado o la han parado?
+    CHECK(dlna::reached_end(178, 180));
+    CHECK(!dlna::reached_end(60, 180));
+    CHECK(dlna::reached_end(0, 0)); // sin duración no se sabe: se da por acabada
+}
+
 void test_http() {
     dlna::HttpRequest request;
     CHECK(dlna::parse_http_request("GET /m/abc/a.mp4 HTTP/1.1\r\nHost: x\r\nRange: bytes=0-\r\n"
@@ -337,6 +387,7 @@ int main() {
     test_jpeg();
     test_metadata();
     test_soap();
+    test_audio();
     test_http();
     if (failures == 0) {
         std::printf("dlna_test: todo bien\n");

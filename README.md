@@ -147,6 +147,9 @@ tests/                       pruebas de src/model (con la descripción real de u
 
 ## Estado
 
+**0.4.1 (24-nov-2026)** — el código de DLNA es el mismo que usa la versión propia de Music para
+oír la música en la tele. Sin cambios a la vista.
+
 **0.4.0 (24-nov-2026)** — mandar a la tele por DLNA con `V`. Probado desde el Cardputer con
 una LG webOS de 2018: fotos (también PNG convertida y JPEG girado por EXIF, que llega derecho),
 un MOV, saltos, pausa, cambiar de fichero, dejar de mandar y salir de la app con la tele en

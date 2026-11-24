@@ -4,8 +4,6 @@
 
 #include "dlna_caster.h"
 
-#include "gallery.h"
-
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -52,7 +50,10 @@ constexpr const char* kPhotoScale =
 constexpr int kConvertTimeoutMs = 60000;
 // Ficheros que se siguen sirviendo después de mandar otro: la tele puede estar acabando
 // de pedir el anterior.
-constexpr size_t kServedKept = 3;
+constexpr size_t kServedKept = 6; // con su carátula, cada canción ocupa dos
+// Con la siguiente dada, lo que la tele puede estar parada al cambiar antes de que se dé
+// por hecho que no ha sabido.
+constexpr uint32_t kNextGraceMs = 4000;
 // SetAVTransportURI y Play no contestan hasta que la tele ha abierto el fichero: en la LG,
 // tres o cuatro segundos para una foto.
 constexpr int kPlayTimeoutMs = 20000;
@@ -437,15 +438,34 @@ void DlnaCaster::discovery_loop() {
 // ---------------------------------------------------------------- órdenes
 
 void DlnaCaster::cast(const dlna::Renderer& tv, const std::string& path, bool video) {
+    CastMedia media;
+    media.path = path;
+    media.media_class = video ? dlna::MediaClass::Video : dlna::MediaClass::Photo;
+    cast(tv, media);
+}
+
+void DlnaCaster::cast(const dlna::Renderer& tv, const CastMedia& media) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (wanted_.tv.udn != tv.udn) {
+            // Otra tele: su volumen se pregunta de nuevo.
+            volume_ = -1;
+            muted_ = false;
+            volume_dirty_ = mute_dirty_ = false;
+            volume_wanted_ = !tv.rendering_control.empty();
+        }
         wanted_.generation += 1;
         wanted_.tv = tv;
-        wanted_.path = path;
-        wanted_.video = video;
+        wanted_.media = media;
         stop_requested_ = false;
         toggles_ = 0;
+        pause_requested_ = false;
         seek_ = 0;
+        finished_ = false;
+        advanced_ = false;
+        next_dirty_ = false;
+        next_wanted_ = CastMedia{};
+        next_url_.clear();
         active_ = true;
         error_.clear();
     }
@@ -461,6 +481,83 @@ void DlnaCaster::toggle_pause() {
         ++toggles_;
     }
     wake_.notify_all();
+}
+
+void DlnaCaster::pause() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pause_requested_ = true;
+    }
+    wake_.notify_all();
+}
+
+void DlnaCaster::set_next(const CastMedia& media) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!active_ || wanted_.tv.udn == next_unsupported_udn_) {
+            return;
+        }
+        next_wanted_ = media;
+        next_dirty_ = true;
+    }
+    wake_.notify_all();
+}
+
+bool DlnaCaster::take_advanced() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const bool advanced = advanced_;
+    advanced_ = false;
+    return advanced;
+}
+
+bool DlnaCaster::take_finished() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const bool finished = finished_;
+    finished_ = false;
+    return finished;
+}
+
+int DlnaCaster::volume() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return volume_;
+}
+
+bool DlnaCaster::muted() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return muted_;
+}
+
+int DlnaCaster::change_volume(int delta) {
+    int volume = -1;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (volume_ < 0) {
+            volume_wanted_ = !wanted_.tv.rendering_control.empty();
+        }
+        else {
+            volume_ = std::clamp(volume_ + delta, 0, 100);
+            volume_dirty_ = true;
+            if (muted_ && delta > 0) {
+                muted_ = false; // subir el volumen quita el silencio, como en la tele
+                mute_dirty_ = true;
+            }
+            volume = volume_;
+        }
+    }
+    wake_.notify_all();
+    return volume;
+}
+
+bool DlnaCaster::toggle_mute() {
+    bool muted = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        muted_ = !muted_;
+        mute_dirty_ = true;
+        muted = muted_;
+    }
+    wake_.notify_all();
+    return muted;
 }
 
 void DlnaCaster::seek(double seconds) {
@@ -480,7 +577,7 @@ void DlnaCaster::stop() {
         stop_requested_ = true;
         active_ = false;
         wanted_.generation += 1; // abandona lo que se esté preparando
-        wanted_.path.clear();
+        wanted_.media = CastMedia{};
     }
     state_ = CastState::Off;
     wake_.notify_all();
@@ -578,7 +675,9 @@ void DlnaCaster::worker_loop() {
         std::unique_lock<std::mutex> lock(mutex_);
         const auto pending = [&] {
             return quit_ || stop_requested_ || wanted_.generation != current_generation_ || toggles_ > 0 ||
-                   seek_ != 0;
+                   pause_requested_ || seek_ != 0 ||
+                   (active_ && (volume_dirty_ || mute_dirty_ || volume_wanted_)) ||
+                   (next_dirty_ && (state_ == CastState::Playing || state_ == CastState::Paused));
         };
         // Sin nada en la tele no hay nada que vigilar: se duerme hasta que se pida algo.
         if (active_) {
@@ -601,7 +700,7 @@ void DlnaCaster::worker_loop() {
             Job job = wanted_;
             current_generation_ = job.generation;
             lock.unlock();
-            if (!job.path.empty()) {
+            if (!job.media.path.empty()) {
                 current_ = job;
                 do_cast(job);
                 last_poll = now_ms();
@@ -616,6 +715,24 @@ void DlnaCaster::worker_loop() {
             if (toggles % 2 == 1) {
                 do_toggle();
             }
+            continue;
+        }
+        if (pause_requested_) {
+            pause_requested_ = false;
+            lock.unlock();
+            if (state_ == CastState::Playing) {
+                do_toggle();
+            }
+            continue;
+        }
+        if (volume_dirty_ || mute_dirty_ || volume_wanted_) {
+            lock.unlock();
+            do_volume();
+            continue;
+        }
+        if (next_dirty_ && (state_ == CastState::Playing || state_ == CastState::Paused)) {
+            lock.unlock();
+            do_set_next();
             continue;
         }
         if (seek_ != 0) {
@@ -644,7 +761,7 @@ bool DlnaCaster::convert_photo(uint64_t generation, const std::string& path, int
     filter += ",format=yuvj420p";
 
     std::vector<std::string> args = {"ffmpeg", "-v", "error", "-nostdin", "-y"};
-    if (gallery::is_jpeg(path)) {
+    if (dlna::mime_type(path) == "image/jpeg") {
         // El giro lo pone el filtro, según el EXIF que ya se ha leído.
         args.push_back("-noautorotate");
     }
@@ -695,45 +812,26 @@ bool DlnaCaster::convert_photo(uint64_t generation, const std::string& path, int
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
-void DlnaCaster::do_cast(const Job& job) {
+bool DlnaCaster::prepare(const Job& job, std::string& url, std::string& metadata) {
     const uint64_t generation = job.generation;
-    set_state(CastState::Sending);
-    position_ = 0;
-    duration_ = 0;
-    cast_started_ms_ = now_ms();
-    poll_failures_ = 0;
-    debug("mandando %s a %s", job.path.c_str(), job.tv.name.c_str());
-
-    // Qué tipos dice aceptar esta tele: se pregunta una vez por tele.
-    if (sink_udn_ != job.tv.udn) {
-        sink_.clear();
-        sink_udn_ = job.tv.udn;
-        if (!job.tv.connection_manager.empty()) {
-            std::string response;
-            int upnp_error = 0;
-            if (soap(job.tv.connection_manager, dlna::kConnectionManagerService, "GetProtocolInfo",
-                     "", response, upnp_error)) {
-                dlna::xml_value(response, "Sink", sink_);
-            }
-        }
-    }
-    if (superseded(generation)) {
-        return;
-    }
-
-    const std::string name = std::filesystem::path(job.path).filename().string();
+    const CastMedia& media = job.media;
+    const std::string name = std::filesystem::path(media.path).filename().string();
     Served served;
-    served.path = job.path;
+    served.path = media.path;
     std::string url_name = dlna::url_safe_name(name);
     std::string profile;
-    dlna::MediaClass media_class = job.video ? dlna::MediaClass::Video : dlna::MediaClass::Photo;
+    const dlna::MediaClass media_class = media.media_class;
 
-    if (job.video) {
+    if (media_class == dlna::MediaClass::Video) {
         served.mime = dlna::choose_mime(name, sink_);
+    }
+    else if (media_class == dlna::MediaClass::Audio) {
+        served.mime = dlna::choose_mime(name, sink_);
+        profile = dlna::audio_profile(served.mime);
     }
     else {
         std::vector<uint8_t> head(512 * 1024);
-        std::ifstream file(job.path, std::ios::binary);
+        std::ifstream file(media.path, std::ios::binary);
         file.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(head.size()));
         head.resize(static_cast<size_t>(file.gcount()));
         dlna::JpegInfo info;
@@ -741,12 +839,12 @@ void DlnaCaster::do_cast(const Job& job) {
         if (dlna::photo_needs_conversion(jpeg ? &info : nullptr)) {
             const std::string out = temp_dir_ + "/" + std::to_string(generation) + ".jpg";
             debug("convirtiendo a JPEG (%s)", jpeg ? "JPEG raro" : "otro formato");
-            if (!convert_photo(generation, job.path, jpeg ? info.orientation : 1, out)) {
+            if (!convert_photo(generation, media.path, jpeg ? info.orientation : 1, out)) {
                 if (!superseded(generation)) {
                     fail(generation, "Can't convert this photo");
                 }
                 ::unlink(out.c_str());
-                return;
+                return false;
             }
             served.path = out;
             served.temporary = true;
@@ -768,7 +866,7 @@ void DlnaCaster::do_cast(const Job& job) {
         if (served.temporary) {
             ::unlink(served.path.c_str());
         }
-        return;
+        return false;
     }
     served.features = dlna::content_features(media_class, profile);
 
@@ -777,20 +875,72 @@ void DlnaCaster::do_cast(const Job& job) {
 
     if (!ensure_server()) {
         fail(generation, "Can't start the file server");
-        return;
+        return false;
     }
     dlna::Url tv_url;
     dlna::parse_url(job.tv.av_transport, tv_url);
     const std::string address = local_address_towards(tv_url.host, tv_url.port);
     if (address.empty()) {
         fail(generation, "No network to reach the TV");
-        return;
+        return false;
+    }
+    const std::string origin = "http://" + address + ":" + std::to_string(port_);
+    dlna::ItemInfo item;
+    item.title = media.title.empty() ? std::filesystem::path(name).stem().string() : media.title;
+    item.artist = media.artist;
+    item.album = media.album;
+    if (!media.cover_path.empty() && ::access(media.cover_path.c_str(), R_OK) == 0) {
+        // La carátula va por el mismo servidor; la tele la pide aparte.
+        Served cover;
+        cover.path = media.cover_path;
+        cover.mime = dlna::mime_type(media.cover_path);
+        if (cover.mime.empty()) {
+            cover.mime = "image/jpeg";
+        }
+        cover.features = dlna::content_features(dlna::MediaClass::Photo, "");
+        const std::string cover_name = dlna::url_safe_name(std::filesystem::path(media.cover_path).filename().string());
+        item.cover_url = origin + "/m/" + add_served(std::move(cover)) + "/" + cover_name;
     }
     const std::string mime = served.mime;
     const std::string token = add_served(std::move(served));
-    const std::string url = "http://" + address + ":" + std::to_string(port_) + "/m/" + token + "/" + url_name;
-    const std::string metadata = dlna::didl_metadata(name, url, mime, media_class, profile, size);
+    url = origin + "/m/" + token + "/" + url_name;
+    metadata = dlna::didl_metadata(item, url, mime, media_class, profile, size);
     debug("URL %s (%s, %s)", url.c_str(), mime.c_str(), profile.c_str());
+    return true;
+}
+
+void DlnaCaster::do_cast(const Job& job) {
+    const uint64_t generation = job.generation;
+    set_state(CastState::Sending);
+    position_ = 0;
+    duration_ = 0;
+    cast_started_ms_ = now_ms();
+    poll_failures_ = 0;
+    const CastMedia& media = job.media;
+    debug("mandando %s a %s", media.path.c_str(), job.tv.name.c_str());
+
+    // Qué tipos dice aceptar esta tele: se pregunta una vez por tele.
+    if (sink_udn_ != job.tv.udn) {
+        sink_.clear();
+        sink_udn_ = job.tv.udn;
+        if (!job.tv.connection_manager.empty()) {
+            std::string response;
+            int upnp_error = 0;
+            if (soap(job.tv.connection_manager, dlna::kConnectionManagerService, "GetProtocolInfo",
+                     "", response, upnp_error)) {
+                dlna::xml_value(response, "Sink", sink_);
+            }
+        }
+    }
+    if (superseded(generation)) {
+        return;
+    }
+
+    std::string url;
+    std::string metadata;
+    if (!prepare(job, url, metadata)) {
+        return;
+    }
 
     std::string response;
     int upnp_error = 0;
@@ -837,7 +987,14 @@ void DlnaCaster::do_cast(const Job& job) {
         return;
     }
     debug("en la tele");
-    set_state(job.video ? CastState::Playing : CastState::Showing);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        reached_playing_ = false;
+        if (media.duration > 0) {
+            duration_ = media.duration;
+        }
+    }
+    set_state(job.playable() ? CastState::Playing : CastState::Showing);
 }
 
 void DlnaCaster::poll_tv() {
@@ -847,7 +1004,7 @@ void DlnaCaster::poll_tv() {
         job = current_;
     }
     const auto state = state_.load();
-    if (!job.video || state == CastState::Error || state == CastState::Off) {
+    if (!job.playable() || state == CastState::Error || state == CastState::Off) {
         return;
     }
     std::string response;
@@ -867,25 +1024,67 @@ void DlnaCaster::poll_tv() {
         return;
     }
     switch (transport) {
-        case dlna::TransportState::Playing:
+        case dlna::TransportState::Playing: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            reached_playing_ = true;
+            stopped_since_ = 0;
             set_state(CastState::Playing);
             break;
+        }
         case dlna::TransportState::Paused:
             set_state(CastState::Paused);
             break;
         case dlna::TransportState::Stopped:
-        case dlna::TransportState::NoMedia:
+        case dlna::TransportState::NoMedia: {
             // Al empezar, alguna dice STOPPED antes de ponerse a cargar.
-            if (now_ms() - cast_started_ms_ > kStartGraceMs) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!next_url_.empty() && reached_playing_) {
+                // Con la siguiente dada, la tele pasa un momento por STOPPED al cambiar:
+                // sólo si se queda parada es que no ha sabido encadenar.
+                if (stopped_since_ == 0) {
+                    stopped_since_ = now_ms();
+                }
+                if (now_ms() - stopped_since_ < kNextGraceMs) {
+                    break;
+                }
+                debug("la tele no ha pasado sola a la siguiente");
+                next_url_.clear();
+            }
+            if ((reached_playing_ || now_ms() - cast_started_ms_ > kStartGraceMs) && state != CastState::Stopped) {
+                // Lo que se sabe de antes de pararse (esta vuelta aún no ha preguntado la
+                // posición, que al parar muchas ponen a cero) dice si ha llegado al final.
+                if (reached_playing_ && dlna::reached_end(position_, duration_)) {
+                    finished_ = true;
+                    debug("ha acabado");
+                }
                 set_state(CastState::Stopped);
             }
             break;
+        }
         default:
             break;
     }
 
     if (soap(job.tv.av_transport, dlna::kAvTransportService, "GetPositionInfo", dlna::instance_arguments(),
              response, upnp_error, 2500)) {
+        // ¿Ha pasado sola a la siguiente? Lo dice el fichero que está tocando.
+        std::string uri;
+        if (dlna::xml_value(response, "TrackURI", uri)) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!next_url_.empty() && uri == next_url_ && wanted_.generation == job.generation) {
+                debug("la tele ha pasado sola a %s", next_media_.path.c_str());
+                wanted_.media = next_media_;
+                current_.media = next_media_;
+                next_url_.clear();
+                advanced_ = true;
+                finished_ = false;
+                reached_playing_ = true;
+                stopped_since_ = 0;
+                cast_started_ms_ = now_ms();
+                duration_ = next_media_.duration;
+                set_state(CastState::Playing);
+            }
+        }
         double seconds = 0;
         if (dlna::xml_value(response, "RelTime", value) && dlna::parse_hms(value, seconds)) {
             position_ = seconds;
@@ -893,6 +1092,43 @@ void DlnaCaster::poll_tv() {
         if (dlna::xml_value(response, "TrackDuration", value) && dlna::parse_hms(value, seconds) && seconds > 0) {
             duration_ = seconds;
         }
+    }
+}
+
+void DlnaCaster::do_set_next() {
+    Job job;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        job.generation = wanted_.generation;
+        job.tv = wanted_.tv;
+        job.media = next_wanted_;
+        next_dirty_ = false;
+    }
+    if (job.media.path.empty() || !job.playable()) {
+        return;
+    }
+    std::string url;
+    std::string metadata;
+    if (!prepare(job, url, metadata)) {
+        return;
+    }
+    std::string response;
+    int upnp_error = 0;
+    const bool ok = soap(job.tv.av_transport, dlna::kAvTransportService, "SetNextAVTransportURI",
+                         dlna::set_next_uri_arguments(url, metadata), response, upnp_error, kPlayTimeoutMs);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (wanted_.generation != job.generation) {
+        return;
+    }
+    if (ok) {
+        debug("siguiente dada: %s", job.media.path.c_str());
+        next_url_ = url;
+        next_media_ = job.media;
+    }
+    else if (upnp_error != -1) {
+        // No sabe (401, 602…): no se vuelve a intentar con esta tele.
+        debug("la tele no admite SetNextAVTransportURI (%d)", upnp_error);
+        next_unsupported_udn_ = job.tv.udn;
     }
 }
 
@@ -905,7 +1141,7 @@ void DlnaCaster::do_toggle() {
             return;
         }
     }
-    if (!job.video) {
+    if (!job.playable()) {
         return;
     }
     std::string response;
@@ -928,7 +1164,7 @@ void DlnaCaster::do_toggle() {
     if (state == CastState::Stopped || state == CastState::Error) {
         // Acabado: unas lo repiten con Play; otras ya han olvidado el fichero y hay que
         // mandarlo de nuevo, que vale para todas.
-        cast(job.tv, job.path, job.video);
+        cast(job.tv, job.media);
     }
 }
 
@@ -941,7 +1177,7 @@ void DlnaCaster::do_seek(double delta) {
             return;
         }
     }
-    if (!job.video) {
+    if (!job.playable()) {
         return;
     }
     std::string response;
@@ -973,6 +1209,59 @@ void DlnaCaster::do_seek(double delta) {
     else {
         std::lock_guard<std::mutex> lock(mutex_);
         notice_ = upnp_error == -1 ? "The TV isn't answering" : dlna::soap_error_text(upnp_error);
+    }
+}
+
+void DlnaCaster::do_volume() {
+    Job job;
+    int volume = -1;
+    bool muted = false;
+    bool set_volume = false;
+    bool set_mute = false;
+    bool get = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        job = wanted_;
+        volume = volume_;
+        muted = muted_;
+        set_volume = volume_dirty_;
+        set_mute = mute_dirty_;
+        get = volume_wanted_;
+        volume_dirty_ = mute_dirty_ = volume_wanted_ = false;
+    }
+    const std::string& url = job.tv.rendering_control;
+    if (url.empty()) {
+        return;
+    }
+    std::string response;
+    int upnp_error = 0;
+    if (set_mute) {
+        soap(url, dlna::kRenderingControlService, "SetMute", dlna::set_mute_arguments(muted), response, upnp_error,
+             2500);
+    }
+    if (set_volume && volume >= 0) {
+        soap(url, dlna::kRenderingControlService, "SetVolume", dlna::set_volume_arguments(volume), response,
+             upnp_error, 2500);
+    }
+    if (get) {
+        std::string value;
+        if (soap(url, dlna::kRenderingControlService, "GetVolume", dlna::channel_arguments(), response, upnp_error,
+                 2500) &&
+            dlna::xml_value(response, "CurrentVolume", value)) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!volume_dirty_) {
+                volume_ = std::clamp(std::atoi(value.c_str()), 0, 100);
+            }
+        }
+        if (soap(url, dlna::kRenderingControlService, "GetMute", dlna::channel_arguments(), response, upnp_error,
+                 2500) &&
+            dlna::xml_value(response, "CurrentMute", value)) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!mute_dirty_) {
+                muted_ = value == "1" || value == "true";
+            }
+        }
+        debug("volumen de la tele: %d%s", volume_, muted_ ? " (silencio)" : "");
     }
 }
 

@@ -4,8 +4,6 @@
 
 #include "dlna.h"
 
-#include "gallery.h"
-
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -176,6 +174,17 @@ std::string last_value_before(std::string_view xml, std::string_view name, size_
     return value;
 }
 
+uint16_t read16(const uint8_t* p, bool little_endian) {
+    return little_endian ? static_cast<uint16_t>(p[0] | (p[1] << 8)) : static_cast<uint16_t>((p[0] << 8) | p[1]);
+}
+
+uint32_t read32(const uint8_t* p, bool little_endian) {
+    return little_endian ? static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+                               (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24)
+                         : (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
+                               (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+}
+
 /** Tipos MIME que las teles aceptan en lugar de uno dado: mismo contenedor, otro nombre. */
 std::vector<std::string_view> mime_alternatives(std::string_view mime) {
     if (mime == "video/quicktime" || mime == "video/3gpp" || mime == "video/3gpp2" || mime == "video/x-m4v") {
@@ -198,6 +207,27 @@ std::vector<std::string_view> mime_alternatives(std::string_view mime) {
     }
     if (mime == "video/x-flv") {
         return {"video/flv"};
+    }
+    if (mime == "audio/flac") {
+        return {"audio/x-flac"};
+    }
+    if (mime == "audio/mp4") {
+        return {"audio/x-m4a", "audio/m4a", "audio/aac"};
+    }
+    if (mime == "audio/aac") {
+        return {"audio/vnd.dlna.adts", "audio/x-aac", "audio/mp4"};
+    }
+    if (mime == "audio/ogg") {
+        return {"audio/x-ogg", "application/ogg"};
+    }
+    if (mime == "audio/wav") {
+        return {"audio/x-wav", "audio/wave"};
+    }
+    if (mime == "audio/x-ms-wma") {
+        return {"audio/wma"};
+    }
+    if (mime == "audio/x-aiff") {
+        return {"audio/aiff"};
     }
     return {};
 }
@@ -333,6 +363,11 @@ bool parse_description(std::string_view xml, std::string_view location, Renderer
             if (type.find(":service:AVTransport:") != std::string::npos && renderer.av_transport.empty()) {
                 renderer.av_transport = resolve_url(base, control);
                 av_start = start;
+            }
+            else if (type.find(":service:RenderingControl:") != std::string::npos) {
+                if (renderer.rendering_control.empty() || av_start == std::string_view::npos) {
+                    renderer.rendering_control = resolve_url(base, control);
+                }
             }
             else if (type.find(":service:ConnectionManager:") != std::string::npos) {
                 // El de la misma tele: el primero que haya después de su AVTransport, o el
@@ -471,6 +506,12 @@ std::string mime_type(std::string_view file_name) {
         {"m2ts", "video/mp2t"},       {"wmv", "video/x-ms-wmv"},   {"asf", "video/x-ms-asf"},
         {"flv", "video/x-flv"},       {"f4v", "video/mp4"},        {"3gp", "video/3gpp"},
         {"3g2", "video/3gpp2"},       {"ogv", "video/ogg"},        {"ogm", "video/ogg"},
+        {"mp3", "audio/mpeg"},        {"flac", "audio/flac"},      {"m4a", "audio/mp4"},
+        {"m4b", "audio/mp4"},         {"aac", "audio/aac"},        {"ogg", "audio/ogg"},
+        {"oga", "audio/ogg"},         {"opus", "audio/ogg"},       {"wav", "audio/wav"},
+        {"wave", "audio/wav"},        {"wma", "audio/x-ms-wma"},   {"aif", "audio/x-aiff"},
+        {"aiff", "audio/x-aiff"},     {"ape", "audio/x-ape"},      {"wv", "audio/x-wavpack"},
+        {"mpc", "audio/x-musepack"},
     };
     for (const auto& pair : kTypes) {
         if (pair.extension == extension) {
@@ -524,6 +565,41 @@ std::string choose_mime(std::string_view file_name, std::string_view sink) {
     return mime;
 }
 
+int exif_orientation(const uint8_t* data, size_t size) {
+    static constexpr uint8_t kHeader[6] = {'E', 'x', 'i', 'f', 0, 0};
+    if (!data || size < 14 || !std::equal(kHeader, kHeader + 6, data)) {
+        return 1;
+    }
+    const uint8_t* tiff = data + 6;
+    const size_t tiff_size = size - 6;
+    bool little_endian = false;
+    if (tiff[0] == 'I' && tiff[1] == 'I') {
+        little_endian = true;
+    }
+    else if (!(tiff[0] == 'M' && tiff[1] == 'M')) {
+        return 1;
+    }
+    if (read16(tiff + 2, little_endian) != 42) {
+        return 1;
+    }
+    const uint32_t ifd = read32(tiff + 4, little_endian);
+    if (ifd > tiff_size || tiff_size - ifd < 2) {
+        return 1;
+    }
+    const uint16_t count = read16(tiff + ifd, little_endian);
+    for (uint16_t i = 0; i < count; ++i) {
+        const size_t offset = static_cast<size_t>(ifd) + 2 + static_cast<size_t>(i) * 12;
+        if (offset + 12 > tiff_size) {
+            break;
+        }
+        if (read16(tiff + offset, little_endian) == 0x0112) {
+            const uint16_t value = read16(tiff + offset + 8, little_endian);
+            return value >= 1 && value <= 8 ? value : 1;
+        }
+    }
+    return 1;
+}
+
 bool parse_jpeg(const uint8_t* data, size_t size, JpegInfo& info) {
     info = JpegInfo{};
     if (size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
@@ -551,7 +627,7 @@ bool parse_jpeg(const uint8_t* data, size_t size, JpegInfo& info) {
             return false;
         }
         if (marker == 0xE1 && info.orientation == 1 && pos + 2 + length <= size) {
-            info.orientation = gallery::exif_orientation(data + pos + 4, length - 2);
+            info.orientation = exif_orientation(data + pos + 4, length - 2);
         }
         const bool sof = marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
         if (sof) {
@@ -603,6 +679,10 @@ std::string jpeg_profile(int width, int height) {
     return {};
 }
 
+std::string audio_profile(std::string_view mime) {
+    return mime == "audio/mpeg" ? "MP3" : "";
+}
+
 std::string content_features(MediaClass media_class, std::string_view profile) {
     // FLAGS: compatible con DLNA 1.5, pausa de conexión, transferencia en segundo plano y,
     // según el tipo, interactiva (fotos) o en directo (vídeo). OP=01: admite pedir trozos.
@@ -628,15 +708,42 @@ std::string didl_metadata(std::string_view title,
                           MediaClass media_class,
                           std::string_view profile,
                           uint64_t size) {
+    ItemInfo item;
+    item.title = std::string(title);
+    return didl_metadata(item, url, mime, media_class, profile, size);
+}
+
+std::string didl_metadata(const ItemInfo& item,
+                          std::string_view url,
+                          std::string_view mime,
+                          MediaClass media_class,
+                          std::string_view profile,
+                          uint64_t size) {
     std::string didl =
         "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" "
         "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
         "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" "
         "xmlns:dlna=\"urn:schemas-dlna-org:metadata-1-0/\">"
         "<item id=\"1\" parentID=\"0\" restricted=\"1\"><dc:title>";
-    didl += xml_escape(title.empty() ? std::string_view("ZeroGallery") : title);
-    didl += "</dc:title><upnp:class>";
-    didl += media_class == MediaClass::Photo ? "object.item.imageItem.photo" : "object.item.videoItem";
+    didl += xml_escape(item.title.empty() ? std::string_view("Untitled") : std::string_view(item.title));
+    didl += "</dc:title>";
+    if (!item.artist.empty()) {
+        // dc:creator lo leen unas y upnp:artist otras.
+        didl += "<dc:creator>" + xml_escape(item.artist) + "</dc:creator>";
+        didl += "<upnp:artist>" + xml_escape(item.artist) + "</upnp:artist>";
+    }
+    if (!item.album.empty()) {
+        didl += "<upnp:album>" + xml_escape(item.album) + "</upnp:album>";
+    }
+    if (!item.cover_url.empty()) {
+        didl += "<upnp:albumArtURI>" + xml_escape(item.cover_url) + "</upnp:albumArtURI>";
+    }
+    didl += "<upnp:class>";
+    switch (media_class) {
+        case MediaClass::Photo: didl += "object.item.imageItem.photo"; break;
+        case MediaClass::Video: didl += "object.item.videoItem"; break;
+        case MediaClass::Audio: didl += "object.item.audioItem.musicTrack"; break;
+    }
     didl += "</upnp:class><res protocolInfo=\"";
     didl += xml_escape(protocol_info(mime, media_class, profile));
     didl += "\"";
@@ -695,6 +802,24 @@ std::string soap_action_header(std::string_view service, std::string_view action
 std::string set_uri_arguments(std::string_view url, std::string_view metadata) {
     return "<InstanceID>0</InstanceID><CurrentURI>" + xml_escape(url) + "</CurrentURI><CurrentURIMetaData>" +
            xml_escape(metadata) + "</CurrentURIMetaData>";
+}
+
+std::string set_next_uri_arguments(std::string_view url, std::string_view metadata) {
+    return "<InstanceID>0</InstanceID><NextURI>" + xml_escape(url) + "</NextURI><NextURIMetaData>" +
+           xml_escape(metadata) + "</NextURIMetaData>";
+}
+
+std::string channel_arguments() {
+    return "<InstanceID>0</InstanceID><Channel>Master</Channel>";
+}
+
+std::string set_volume_arguments(int volume) {
+    volume = std::clamp(volume, 0, 100);
+    return channel_arguments() + "<DesiredVolume>" + std::to_string(volume) + "</DesiredVolume>";
+}
+
+std::string set_mute_arguments(bool muted) {
+    return channel_arguments() + "<DesiredMute>" + (muted ? "1" : "0") + "</DesiredMute>";
 }
 
 std::string play_arguments() {
@@ -768,6 +893,12 @@ std::string format_hms(double seconds) {
     char text[32];
     std::snprintf(text, sizeof(text), "%02ld:%02ld:%02ld", total / 3600, total / 60 % 60, total % 60);
     return text;
+}
+
+bool reached_end(double position, double duration) {
+    // La tele se pregunta una vez por segundo: lo último que dijo puede ir unos segundos por
+    // detrás del final.
+    return duration <= 0 || position >= duration - 5;
 }
 
 double seek_target(double position, double delta, double duration) {
