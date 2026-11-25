@@ -131,6 +131,8 @@ void ViewerScreen::build_content(lv_obj_t* content) {
     seek_seen_ = lv_subject_get_int(view_model().seek_subject());
     lv_subject_add_observer_obj(view_model().seek_subject(), seek_observer, content, this);
     lv_subject_add_observer_obj(view_model().cast_subject(), cast_observer, content, this);
+    audio_seen_ = lv_subject_get_int(view_model().audio_subject());
+    lv_subject_add_observer_obj(view_model().audio_subject(), audio_observer, content, this);
     // LVGL llama al observador al añadirlo: esa primera llamada carga lo señalado.
     lv_subject_add_observer_obj(view_model().media_subject(), media_observer, content, this);
 
@@ -497,6 +499,25 @@ void ViewerScreen::cast_observer(lv_observer_t* observer, lv_subject_t*) {
             screen->update_picker();
         }
     }
+}
+
+void ViewerScreen::audio_observer(lv_observer_t* observer, lv_subject_t* subject) {
+    auto* screen = static_cast<ViewerScreen*>(lv_observer_get_user_data(observer));
+    if (!screen) {
+        return;
+    }
+    // La llamada que LVGL hace al registrar el observador no es un cambio.
+    const int32_t value = lv_subject_get_int(subject);
+    if (value == screen->audio_seen_) {
+        return;
+    }
+    screen->audio_seen_ = value;
+    const std::string text = std::string("Sound: ") + screen->view_model().audio_output_name();
+    lv_label_set_text(screen->caption_, text.c_str());
+    lv_obj_remove_flag(screen->caption_, LV_OBJ_FLAG_HIDDEN);
+    screen->caption_since_ = lv_tick_get();
+    screen->seek_caption_ = false;
+    screen->place_overlays();
 }
 
 void ViewerScreen::show_status(const char* icon, const char* text) {

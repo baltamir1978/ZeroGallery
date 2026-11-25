@@ -4,6 +4,7 @@
 
 #include "hdmi_player.h"
 
+#include "audio_route.h"
 #include "dlna.h"
 #include "ffmpeg_process.h"
 #include "gallery.h"
@@ -353,7 +354,8 @@ bool HdmiPlayer::show_video_frame(const Request& request, double seconds, int wi
 
 void HdmiPlayer::play_video(const Request& request) {
     const bool loop = request.kind == MediaKind::Animation;
-    std::string audio = loop ? std::string{} : audio_output();
+    bool audio_off = loop;
+    uint32_t audio_seen = audio_generation();
 
     const auto info = hdmi::parse_probe(probe_text(
         {"-v", "error", "-select_streams", "v:0", "-show_entries",
@@ -415,13 +417,20 @@ void HdmiPlayer::play_video(const Request& request) {
         arguments.insert(arguments.end(), {"-i", request.path, "-an", "-vf",
                                            video_filter(size.width, size.height, fps, info.fps), "-f", "rawvideo",
                                            "pipe:1"});
-        if (!audio.empty()) {
-            // Del mismo proceso, como en la pantalla del aparato: imagen y sonido a la par.
-            arguments.insert(arguments.end(), {"-vn", "-ac", "2", "-f", audio, audio == "pulse" ? "Gallery" : "default"});
+        // Del mismo proceso, como en la pantalla del aparato: imagen y sonido a la par.
+        audio_seen = audio_generation();
+        HdmiAudioPipe hdmi_audio;
+        const bool to_hdmi = !audio_off && current_audio_output() == audio::Output::Hdmi;
+        if (to_hdmi && !hdmi_audio.start()) {
+            audio_off = true;
         }
+        const auto audio = audio_off ? std::vector<std::string>{} : audio_arguments();
+        arguments.insert(arguments.end(), audio.begin(), audio.end());
 
         FfmpegProcess ffmpeg;
-        if (!ffmpeg.start(arguments)) {
+        const bool launched = ffmpeg.start(arguments, "ffmpeg", -1, audio_off ? -1 : hdmi_audio.ffmpeg_fd());
+        hdmi_audio.release_ffmpeg_end();
+        if (!launched) {
             fail(request.generation, "Cannot run ffmpeg");
             return;
         }
@@ -430,6 +439,7 @@ void HdmiPlayer::play_video(const Request& request) {
         long frames = 0;
         bool paused = false;
         bool stalled = false;
+        bool restart = false;
         double sought = 0.0;
         const auto started = std::chrono::steady_clock::now();
         for (;;) {
@@ -451,7 +461,13 @@ void HdmiPlayer::play_video(const Request& request) {
                     seek_ = 0.0;
                 }
             }
-            if (paused || sought != 0.0) {
+            if (audio_generation() != audio_seen) {
+                // Otra salida de sonido: se relanza desde donde iba.
+                audio_seen = audio_generation();
+                audio_off = loop;
+                restart = true;
+            }
+            if (paused || sought != 0.0 || restart) {
                 break;
             }
             const long count = ffmpeg.read_some(frame.data() + filled, frame_bytes - filled, 100);
@@ -486,7 +502,7 @@ void HdmiPlayer::play_video(const Request& request) {
         }
         position_ = position;
 
-        if (sought != 0.0 && !paused) {
+        if ((sought != 0.0 || restart) && !paused) {
             ffmpeg.stop();
             continue;
         }
@@ -507,9 +523,9 @@ void HdmiPlayer::play_video(const Request& request) {
                 frame.assign(frame_bytes, 0);
                 continue;
             }
-            if (exit_code != 0 && !audio.empty()) {
+            if (exit_code != 0 && !audio_off) {
                 // Sin pista de sonido, o la salida de sonido no se deja abrir: sólo imagen.
-                audio.clear();
+                audio_off = true;
                 continue;
             }
             if (frames == 0 && position <= 0.0) {

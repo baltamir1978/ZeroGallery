@@ -27,8 +27,13 @@ public:
     FfmpegProcess(const FfmpegProcess&) = delete;
     FfmpegProcess& operator=(const FfmpegProcess&) = delete;
 
-    /** `tool` es «ffmpeg» o «ffprobe»: `ZEROGALLERY_FFMPEG` sólo cambia el primero. */
-    bool start(const std::vector<std::string>& arguments, const char* tool = "ffmpeg");
+    /**
+     * `tool` es «ffmpeg», «ffprobe» u otro programa: `ZEROGALLERY_FFMPEG` sólo cambia el
+     * primero. `stdin_fd`: lo que el hijo lee por la entrada (si no, /dev/null). `fd3`: se le
+     * pasa como descriptor 3 (para «pipe:3» de ffmpeg: el sonido para el HDMI).
+     */
+    bool start(const std::vector<std::string>& arguments, const char* tool = "ffmpeg", int stdin_fd = -1,
+               int fd3 = -1);
 
     /**
      * Lee hasta `size` bytes esperando como mucho `timeout_ms`.

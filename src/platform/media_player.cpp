@@ -4,6 +4,7 @@
 
 #include "media_player.h"
 
+#include "audio_route.h"
 #include "ffmpeg_process.h"
 #include "gallery.h"
 
@@ -254,7 +255,7 @@ std::vector<std::string> video_frame_arguments(const std::string& path, double s
  */
 std::vector<std::string> video_arguments(const std::string& path,
                                          double position,
-                                         const std::string& audio,
+                                         const std::vector<std::string>& audio,
                                          bool loop,
                                          int turns) {
     std::vector<std::string> arguments = {"-nostdin", "-hide_banner", "-loglevel", "error",
@@ -272,14 +273,9 @@ std::vector<std::string> video_arguments(const std::string& path,
     }
     arguments.insert(arguments.end(), {"-i", path, "-an", "-vf", canvas_filter(true, turns), "-pix_fmt", "rgb565le",
                                        "-f", "rawvideo", "pipe:1"});
-    if (!audio.empty()) {
-        // Segunda salida del mismo proceso: al salir las dos del mismo reloj, imagen y
-        // sonido van a la par sin tener que sincronizar nada aquí.
-        // En «pulse» lo último es el nombre con que aparece en el mezclador; en «alsa»,
-        // el dispositivo.
-        arguments.insert(arguments.end(),
-                         {"-vn", "-ac", "2", "-f", audio, audio == "pulse" ? "Gallery" : "default"});
-    }
+    // Segunda salida del mismo proceso (altavoz, cascos o HDMI, ver audio_route.h): al salir
+    // las dos del mismo reloj, imagen y sonido van a la par sin sincronizar nada aquí.
+    arguments.insert(arguments.end(), audio.begin(), audio.end());
     return arguments;
 }
 
@@ -547,7 +543,9 @@ static double video_duration(const std::string& path) {
 
 void MediaPlayer::play_video(const Request& request) {
     const bool loop = request.kind == MediaKind::Animation;
-    std::string audio = loop ? std::string{} : audio_output();
+    // Sin sonido si es una animación o si con sonido ha fallado (hasta que se cambie de salida).
+    bool audio_off = loop;
+    uint32_t audio_seen = audio_generation();
 
     uint64_t toggles_seen = 0;
     int turns = 0;
@@ -630,8 +628,18 @@ void MediaPlayer::play_video(const Request& request) {
     // congelarlo y soltarlo después lo haría correr para recuperar el tiempo perdido. Y el
     // giro cambia el tamaño al que ffmpeg encaja la imagen, que va en sus argumentos.
     for (;;) {
+        audio_seen = audio_generation();
+        HdmiAudioPipe hdmi_audio;
+        const bool to_hdmi = !audio_off && current_audio_output() == audio::Output::Hdmi;
+        if (to_hdmi && !hdmi_audio.start()) {
+            audio_off = true;
+        }
+        const auto audio = audio_off ? std::vector<std::string>{} : audio_arguments();
         FfmpegProcess ffmpeg;
-        if (!ffmpeg.start(video_arguments(request.path, position, audio, loop, turns))) {
+        const bool launched = ffmpeg.start(video_arguments(request.path, position, audio, loop, turns), "ffmpeg", -1,
+                                          audio_off ? -1 : hdmi_audio.ffmpeg_fd());
+        hdmi_audio.release_ffmpeg_end();
+        if (!launched) {
             fail(request.generation, "Cannot run ffmpeg");
             return;
         }
@@ -653,6 +661,12 @@ void MediaPlayer::play_video(const Request& request) {
                 }
                 if (rotation_ != turns) {
                     turns = rotation_;
+                    rotated = true;
+                }
+                if (audio_generation() != audio_seen) {
+                    // Otra salida de sonido: se relanza desde donde iba, como al girar.
+                    audio_seen = audio_generation();
+                    audio_off = loop;
                     rotated = true;
                 }
                 if (seek_ != 0.0) {
@@ -710,7 +724,7 @@ void MediaPlayer::play_video(const Request& request) {
             // Con sonido ha fallado: lo normal es que el vídeo no tenga pista de audio o
             // que la salida de sonido no se deje abrir (a veces tras los primeros
             // fotogramas). Se sigue sólo con la imagen desde donde iba.
-            audio.clear();
+            audio_off = true;
             continue;
         }
         if (frames == 0 && position <= 0.0) {

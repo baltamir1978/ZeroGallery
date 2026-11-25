@@ -87,7 +87,8 @@ la tele sino el Cardputer, con `ffmpeg`, y lo pinta en esa salida sin escritorio
   vista: cada fotograma cambia en un refresco de la pantalla. **Un 1080p a 60 fps no llega a velocidad real** (se
   queda en un 90 %): pasar tantos fotogramas grandes de la GPU a la pantalla es más de lo que da
   el Cardputer.
-- El sonido sale por donde esté el del sistema (altavoz, auriculares o Bluetooth), no por el HDMI.
+- El sonido va **a la tele por el HDMI** si la pantalla acepta sonido (un monitor sin altavoces
+  no). Con `A` se cambia (ver abajo).
 - Con un escritorio en la salida HDMI (lightdm), la salida está ocupada y lo dice.
 - Al dejar de mandar, la pantalla se queda en negro (la consola del sistema vuelve a coger el
   HDMI), no en «sin señal».
@@ -104,6 +105,19 @@ Lo que pide cada aparato (DLNA es un estándar, pero cada marca lo pone a su man
 | Hisense (VIDAA) | Ajustes → Red (o Sistema) → **Compartir contenido** activado | No |
 | Google Cast: Chromecast, Google TV, Nest Hub (y teles con Chromecast integrado) | Nada. Sale en la lista con su nombre y el modelo entre paréntesis, «Salón (Chromecast HD)». Se usa el reproductor de Google, que abre MP4, WebM, MKV (según el códec), MP3, AAC, FLAC, OGG, WAV y JPEG/PNG/GIF/WebP: lo demás no lo reproduce | Sí, en un Google Nest Hub: foto, vídeo, saltos, pausa, volumen. Chromecast HD, sin probar |
 
+## Por dónde suena
+
+Con una foto o un vídeo delante, `A` cambia por dónde suena: **altavoz** del Cardputer,
+**cascos** (sólo si hay unos enchufados) y **HDMI** (sólo si hay una pantalla que acepta sonido).
+Arriba sale «Sound: …» un momento. Si un vídeo está en marcha, sigue desde donde iba por la
+salida nueva.
+
+- Al mandar al HDMI con `V`, el sonido pasa solo a la tele; al dejar de mandar, vuelve al
+  Cardputer.
+- Altavoz y cascos comparten la salida del Cardputer: al enchufar unos cascos el altavoz se
+  calla solo. Con «Speaker» y los cascos puestos suenan los dos.
+- Por el HDMI el volumen es el de la tele.
+
 ## Teclas
 
 Las flechas del Cardputer Zero están en `F`, `Z`, `X` y `C`: valen **con o sin `Fn`**.
@@ -118,6 +132,7 @@ Las flechas del Cardputer Zero están en `F`, `Z`, `X` y `C`: valen **con o sin 
 | `Esc` | Carpeta de arriba | Volver a la lista | Volver a la lista |
 | `Esc` **mantenido** | Salir de la app | Salir de la app | Salir de la app |
 | `V` | Dejar de mandar a la tele | Mandar a la tele / dejar de mandar | Lo mismo |
+| `A` | — | Por dónde suena: altavoz, cascos o HDMI | Lo mismo (sigue donde iba) |
 | `T` | Tema claro / oscuro (se recuerda) | Lo mismo | Lo mismo |
 | `Fn`+`H` | Ayuda | Ayuda | Ayuda |
 | `Fn`+`J` | Captura en `~/Pictures/Screenshots` | Lo mismo | Lo mismo |
@@ -187,6 +202,10 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.7.0 (25-nov-2026)** — `A` elige por dónde suena: altavoz, cascos o HDMI, y al mandar al
+HDMI el sonido va a la tele. Probado con una tele simulada; sin probar los cascos ni con una
+tele de verdad.
 
 **0.6.3 (25-nov-2026)** — el decodificador por hardware sólo con 64 MB de GPU o más (con 32 no
 funciona) y, si se cuelga, el vídeo sigue por software a los 6 s.

@@ -42,7 +42,8 @@ enum class Action {
     Select,
     Back,
     ToggleTheme,
-    Cast, // mandar a la tele (o dejar de mandar)
+    Cast,  // mandar a la tele (o dejar de mandar)
+    Audio, // por dónde suena: altavoz, cascos o HDMI
 };
 
 /**

@@ -9,6 +9,7 @@
 #include "hdmi.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -364,7 +365,17 @@ bool KmsDisplay::show(const uint8_t* frame, int width, int height, bool wait) {
         }
         frame_width_ = frame_height_ = 0;
         for (auto& buffer : frames_) {
-            if (!create_buffer(buffer, width, height, true)) {
+            // La memoria de vídeo (CMA) la presta Linux a la caché de disco mientras no se usa
+            // y la recupera moviendo páginas; justo tras arrancar, con el disco ocupado, eso
+            // puede fallar un momento («Failed to allocate from GEM DMA helper»). Se reintenta.
+            bool created = false;
+            for (int attempt = 0; attempt < 5 && !created; ++attempt) {
+                created = create_buffer(buffer, width, height, true);
+                if (!created) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                }
+            }
+            if (!created) {
                 for (auto& created : frames_) {
                     destroy_buffer(created);
                 }

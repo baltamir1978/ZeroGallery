@@ -124,6 +124,8 @@ void test_keys() {
     CHECK(gallery::action_for_key('z') == Action::Left);
     CHECK(gallery::action_for_key(19) == Action::Right);
     CHECK(gallery::action_for_key('C') == Action::Right);
+    CHECK(gallery::action_for_key('a') == Action::Audio);
+    CHECK(gallery::action_for_key('A') == Action::Audio);
     CHECK(gallery::action_for_key(10) == Action::Select);
     CHECK(gallery::action_for_key(' ') == Action::Select);
     CHECK(gallery::action_for_key(27) == Action::Back);

@@ -130,6 +130,9 @@ Action action_for_key(uint32_t key) {
         case 'v':
         case 'V':
             return Action::Cast;
+        case 'a':
+        case 'A':
+            return Action::Audio;
         default:
             return Action::None;
     }

@@ -253,6 +253,8 @@ uint32_t map_evdev_key(uint16_t code) {
             return 't';
         case KEY_V: // mandar a la tele
             return 'v';
+        case KEY_A: // por dónde suena
+            return 'a';
         case KEY_Z:
             return 'z';
         case KEY_C:

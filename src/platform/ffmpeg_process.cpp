@@ -26,7 +26,7 @@ const char* env_or(const char* name, const char* fallback) {
     return value && value[0] != '\0' ? value : fallback;
 }
 
-bool FfmpegProcess::start(const std::vector<std::string>& arguments, const char* tool) {
+bool FfmpegProcess::start(const std::vector<std::string>& arguments, const char* tool, int stdin_fd, int fd3) {
     stop();
     int ends[2];
     if (pipe2(ends, O_CLOEXEC) != 0) {
@@ -58,10 +58,24 @@ bool FfmpegProcess::start(const std::vector<std::string>& arguments, const char*
             _exit(kExitExecFailed);
         }
 #endif
+        if (fd3 >= 0) {
+            // dup2 a otro número quita el O_CLOEXEC; si ya es el 3, hay que quitarlo a mano.
+            if (fd3 == 3) {
+                fcntl(3, F_SETFD, 0);
+            }
+            else {
+                dup2(fd3, 3);
+            }
+        }
         dup2(ends[1], STDOUT_FILENO);
         const int null = ::open("/dev/null", O_RDWR);
-        if (null >= 0) {
+        if (stdin_fd >= 0) {
+            dup2(stdin_fd, STDIN_FILENO);
+        }
+        else if (null >= 0) {
             dup2(null, STDIN_FILENO);
+        }
+        if (null >= 0) {
             dup2(null, STDERR_FILENO);
         }
         execvp(argv[0], argv.data());

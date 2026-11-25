@@ -179,12 +179,40 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   - Fotos a 1920×1200: 12 Mpx en ~2 s. `-lowres` de ffmpeg apenas ayuda (1,90 → 1,78 s: lo
     que pesa es leer el JPEG comprimido), así que no se usa.
   - El sonido no va por HDMI (`snd_bcm2835.enable_hdmi=0` en `cpzero`): va por PipeWire, como siempre.
+- **Por dónde suena (0.7.0, tecla A en el visor)**: altavoz, cascos (si están puestos) o HDMI
+  (si hay una pantalla que acepta sonido). `model/audio_output.*` (orden y disponibilidad, con
+  pruebas) y `platform/audio_route.*`. Lo que se sabe del aparato (25-nov-2026):
+  - Altavoz y cascos son el mismo códec ES8389 (`card1`, `ES8389Audio`): el amplificador del
+    altavoz sale del canal izquierdo de los cascos y el controlador de M5Stack lo apaga solo al
+    enchufar cascos (`m5stack,hp-mute-pins = "Speaker"` en el árbol de dispositivos). Elegir es
+    el control «Speaker Switch» (MIXER); los cascos se detectan con «Headphones Jack» (CARD). Se
+    leen y escriben con los ioctls de `sound/asound.h` sobre `/dev/snd/controlC1`, sin alsa-lib.
+    Con «Speaker» y cascos puestos suenan los dos (no hay interruptor de cascos). Al salir se
+    deja como lo tendría el controlador (apagado si hay cascos). PipeWire sólo ve un puerto,
+    «Speakers»: no sirve para esto.
+  - El HDMI es `card0` (`vc4hdmi`; existe aunque `snd_bcm2835.enable_hdmi=0`). PipeWire **no
+    sabe abrirlo**: su perfil «Pro Audio» falla («no format found ... IEC958_SUBFRAME_LE») y no
+    hay otro. El PCM `hdmi:CARD=vc4hdmi,DEV=0` de alsa-lib (`/usr/share/alsa/cards/vc4-hdmi.conf`,
+    plugin iec958) sí; `default:CARD=vc4hdmi` no (ENOMEM). Pero **la salida ALSA de ffmpeg pide el
+    periodo mínimo, que ahí es de 2 muestras**: XRUN continuo. Por eso ffmpeg saca el sonido en
+    crudo por `pipe:3` (`FfmpegProcess::start` con `fd3`) y un `aplay` (alsa-utils, viene en el
+    sistema) lo toca con periodo 512 y búfer 2048 (43 ms), tubería de 4 KB (21 ms): así no se
+    separa de la imagen. `HdmiAudioPipe`. Sin `/usr/bin/aplay`, el HDMI no sale como salida.
+  - Hay sonido HDMI si hay pantalla conectada (/sys) y su ELD (`/proc/asound/card0/eld#0`)
+    tiene `sad_count` ≥ 1. El ELD **conserva la última pantalla** al desenchufar y no tiene
+    `monitor_present`/`eld_valid` (eso es de HDA).
+  - Cambiar de salida a mitad de vídeo relanza ffmpeg desde donde iba (`audio_generation()`,
+    como un giro en la pantalla del aparato). Al elegir HDMI con `V`, el sonido pasa al HDMI; al
+    dejarlo (o elegir una tele), vuelve al Cardputer.
 - **Probar el HDMI sin cable**: `sudo sh -c 'echo on > /sys/class/drm/card0-HDMI-A-1/status'`
   lo da por conectado (modos de serie, 1024×768) y `echo detect` lo devuelve. **Para simular
   una pantalla concreta** (así se probó 1920×1200@60): se escribe un EDID de 128 bytes en
   `/sys/kernel/debug/dri/0/HDMI-A-1/edid_override`, se pone `off` y `on` en `status` y se
   sondea (`kmsprint -m`). **Al acabar, `printf reset >` ese fichero** (con `echo` da I/O error):
-  si no, una pantalla de verdad enchufada antes de reiniciar usaría el EDID falso. Los fallos
+  si no, una pantalla de verdad enchufada antes de reiniciar usaría el EDID falso. Para probar
+  el sonido, el EDID necesita un bloque CEA con un bloque de audio (LPCM 2 canales) y el VSDB de
+  HDMI (sin él la pantalla es DVI y no hay sonido); así se probó la 0.7.0. Si el sonido va, en
+  `/proc/asound/card0/pcm0p/sub0/status` el `hw_ptr` avanza unas 48 000 por segundo. Los fallos
   de la GPU al refrescar se cuentan en `/sys/kernel/debug/dri/0/hvs_underrun`. Lo que hay en
   cada plano se ve en `sudo cat /sys/kernel/debug/dri/0/state` (tamaño y formato del búfer) y
   quién es el dueño en `.../clients`; `kmsgrab` no captura planos YUV. Para probar sin interfaz
@@ -219,6 +247,12 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.7.0 (25-nov-2026)**: tecla A en el visor: altavoz, cascos o HDMI (ver «Decisiones»). Con
+  `V` → HDMI el sonido va a la tele. Probado en `cpzero` con una tele simulada (EDID con sonido):
+  sonido por HDMI a tiempo real (~48 900 muestras/s, sin XRUN), A lo pasa al altavoz y el vídeo
+  sigue donde iba, la app enciende el altavoz si estaba apagado, la ayuda con su fila nueva cabe.
+  Además, la pantalla reintenta crear sus búferes si la memoria de vídeo falla un momento.
+  **Sin probar**: los cascos (no había unos puestos) y oírlo en una tele de verdad.
 - **0.6.3 (25-nov-2026)**: el decodificador por hardware sólo con `gpu_mem` ≥ 64 (con 32 aparece
   pero no funciona) y, si no da el primer fotograma en 6 s, por software. Probado en `cpzero`
   con 32 (falla, ver «Decisiones») y de vuelta a 64 (desde ZeroPower): hardware normal, y con

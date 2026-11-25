@@ -33,7 +33,8 @@ BaseViewModel::BaseViewModel(std::filesystem::path start_directory)
       media_subject_(0),
       playback_subject_(0),
       seek_subject_(0),
-      cast_subject_(0) {}
+      cast_subject_(0),
+      audio_subject_(0) {}
 
 BaseViewModel::~BaseViewModel() = default;
 
@@ -75,6 +76,19 @@ int BaseViewModel::seek_seconds() const {
 
 lv_subject_t* BaseViewModel::cast_subject() {
     return cast_subject_.native();
+}
+
+lv_subject_t* BaseViewModel::audio_subject() {
+    return audio_subject_.native();
+}
+
+const char* BaseViewModel::audio_output_name() const {
+    return audio::output_name(audio_.output());
+}
+
+void BaseViewModel::set_audio(audio::Output output) {
+    audio_.set(output);
+    audio_subject_.set(audio_subject_.value() + 1);
 }
 
 platform::DlnaCaster* BaseViewModel::caster() const {
@@ -214,6 +228,15 @@ bool BaseViewModel::handle_key(uint32_t key) {
     }
     if (picker_open_) {
         return handle_picker(action);
+    }
+    if (action == gallery::Action::Audio) {
+        // Por dónde suena: sólo en el visor, que es donde suena algo.
+        if (page_ != model::AppPage::Viewer) {
+            return false;
+        }
+        audio_.cycle();
+        audio_subject_.set(audio_subject_.value() + 1);
+        return true;
     }
     if (action == gallery::Action::Cast) {
         // En la lista de carpetas la V sólo sirve para dejar de mandar: a qué tele se
@@ -381,6 +404,9 @@ bool BaseViewModel::handle_picker(gallery::Action action) {
                 return true;
             }
             const bool hdmi = hdmi_listed();
+            // El sonido se cambia ya (para que ffmpeg arranque con él), pero se avisa al
+            // final: si no, el rótulo del vídeo taparía el de «Sound: …».
+            bool audio_changed = false;
             if (hdmi && picker_selection_ == 0) {
                 // Al HDMI: lo que se mandara a una tele se deja.
                 if (caster_ && caster_->active()) {
@@ -390,6 +416,11 @@ bool BaseViewModel::handle_picker(gallery::Action action) {
                     hdmi_ = std::make_unique<platform::HdmiPlayer>();
                 }
                 hdmi_chosen_ = true;
+                // La imagen en la tele: el sonido también, si la tele lo acepta (con A se cambia).
+                if (platform::AudioRoute::hdmi_audio_available()) {
+                    audio_.set(audio::Output::Hdmi);
+                    audio_changed = true;
+                }
             }
             else {
                 const auto renderers = caster_ ? caster_->renderers() : std::vector<dlna::Renderer>{};
@@ -400,11 +431,18 @@ bool BaseViewModel::handle_picker(gallery::Action action) {
                 tv_ = renderers[index];
                 hdmi_.reset(); // apaga la salida HDMI
                 hdmi_chosen_ = false;
+                if (audio_.output() == audio::Output::Hdmi) {
+                    audio_.set(audio::device_default(platform::AudioRoute::headphones_plugged()));
+                    audio_changed = true;
+                }
             }
             close_picker();
             cast_selected();
             // El visor vuelve a mirar: un vídeo ya no se reproduce aquí sino en la tele.
             media_subject_.set(media_subject_.value() + 1);
+            if (audio_changed) {
+                audio_subject_.set(audio_subject_.value() + 1);
+            }
             return true;
         }
         case gallery::Action::Cast:
@@ -451,6 +489,10 @@ void BaseViewModel::stop_casting() {
         caster_->stop();
     }
     hdmi_.reset();
+    // Sin la tele, el sonido vuelve al Cardputer.
+    if (audio_.output() == audio::Output::Hdmi) {
+        set_audio(audio::device_default(platform::AudioRoute::headphones_plugged()));
+    }
     cast_subject_.set(cast_subject_.value() + 1);
     // Un vídeo que estaba en la tele vuelve a verse aquí.
     if (page_ == model::AppPage::Viewer) {

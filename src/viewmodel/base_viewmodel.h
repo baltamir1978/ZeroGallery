@@ -5,6 +5,7 @@
 #pragma once
 
 #include "app_page.h"
+#include "audio_route.h"
 #include "dlna_caster.h"
 #include "hdmi_player.h"
 #include "gallery.h"
@@ -65,6 +66,11 @@ public:
     /** Cambia cada vez que cambia la lista. */
     uint32_t picker_version();
 
+    /** Cambia cuando se cambia por dónde suena (tecla A, o al mandar al HDMI y dejarlo). */
+    lv_subject_t* audio_subject();
+    /** Por dónde suena ahora, para el rótulo: «Speaker», «Headphones», «HDMI». */
+    const char* audio_output_name() const;
+
     // Cómo va lo que se está mandando, venga de una tele o del HDMI (para el visor).
     std::string output_name() const;
     platform::CastState output_state() const;
@@ -100,6 +106,8 @@ private:
     void open_picker();
     void close_picker();
     void stop_casting();
+    /** Pone la salida de sonido y avisa al visor si cambia. */
+    void set_audio(audio::Output output);
     /** Si hay que poner «HDMI» en la lista (se mira /sys como mucho una vez por segundo). */
     bool hdmi_listed();
     /** Manda a la tele lo señalado, si se está mandando y es una foto o un vídeo. */
@@ -121,6 +129,8 @@ private:
     reactive::IntSubject playback_subject_;
     reactive::IntSubject seek_subject_;
     reactive::IntSubject cast_subject_;
+    reactive::IntSubject audio_subject_;
+    platform::AudioRoute audio_;
     int seek_seconds_{0};
     std::unique_ptr<platform::DlnaCaster> caster_;
     dlna::Renderer tv_;
