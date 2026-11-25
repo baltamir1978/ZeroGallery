@@ -6,7 +6,7 @@
 
 cmake_minimum_required(VERSION 3.31)
 
-project(zerogallery VERSION 0.5.0 LANGUAGES C CXX)
+project(zerogallery VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -647,6 +647,9 @@ if(USE_DESKTOP)
     target_link_libraries(gcast_test PRIVATE ${PROJECT_NAME}_model)
     target_compile_definitions(gcast_test PRIVATE FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     add_test(NAME gcast_test COMMAND gcast_test)
+    add_executable(hdmi_test tests/hdmi_test.cpp)
+    target_link_libraries(hdmi_test PRIVATE ${PROJECT_NAME}_model)
+    add_test(NAME hdmi_test COMMAND hdmi_test)
 endif()
 
 # Package deb

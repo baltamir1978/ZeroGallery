@@ -3,8 +3,8 @@
 Galería de fotos y vídeos para el [M5Stack Cardputer Zero](https://docs.m5stack.com/): se elige
 una carpeta y se pasan sus fotos y vídeos a pantalla completa con las flechas del teclado.
 Con `V`, lo que se está viendo **sale en la tele** —una Smart TV por DLNA (LG, Samsung, Sony,
-Hisense…) o un Chromecast, Google TV o Nest Hub por Google Cast— y se sigue manejando desde el
-Cardputer.
+Hisense…) o un Chromecast, Google TV o Nest Hub por Google Cast, o una pantalla enchufada a su
+**HDMI**— y se sigue manejando desde el Cardputer.
 
 <p>
   <img src="screenshot/folders.png" alt="Lista de una carpeta" width="320" />
@@ -38,7 +38,7 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
   tiene sonido o no hay salida, se reproduce sólo la imagen.
 - **Mandar a la tele** (`V`) por DLNA o Google Cast (Chromecast, Google TV, Nest Hub): lo que
   se está viendo sale en la tele, a su resolución y con su sonido, y se sigue manejando desde
-  el Cardputer (ver abajo).
+  el Cardputer (ver abajo). También **por HDMI**, a una pantalla enchufada al Cardputer.
 
 ## Mandar a la tele
 
@@ -68,6 +68,22 @@ lista de carpetas) deja de mandar y para la tele; salir de la app también la pa
   multicast (SSDP para DLNA, mDNS para Cast), que no pasa por Tailscale. Para una red sin
   multicast se puede dar a mano: `ZEROGALLERY_TV=<url de la descripción DLNA>` o
   `ZEROGALLERY_CAST=<ip>`. `ZEROGALLERY_DLNA_DEBUG=1` cuenta en el terminal todo lo que pasa.
+
+### Por HDMI
+
+Con una pantalla o una tele enchufada al HDMI del Cardputer, la lista de `V` empieza por
+**HDMI**, y se maneja igual que una tele: pasar de foto, saltar y pausar. Aquí no decodifica
+la tele sino el Cardputer, con `ffmpeg`, y lo pinta en esa salida sin escritorio de por medio:
+
+- Se pone el modo que prefiere la pantalla (si es 4K, el mayor hasta 1080p). Las fotos se
+  encajan a ese tamaño; los vídeos llegan a su tamaño y la GPU los amplía a pantalla completa.
+- Un H.264 de 1080p va a velocidad real por software (lo decodifica a 1,6 veces la velocidad real),
+  así que no hace falta el decodificador por hardware ni subir `gpu_mem` (ZeroPower lo deja en 16).
+  Los vídeos de más de 30 fps se ven a 30.
+- El sonido sale por donde esté el del sistema (altavoz, auriculares o Bluetooth), no por el HDMI.
+- Con un escritorio en la salida HDMI (lightdm), la salida está ocupada y lo dice.
+- Mientras se manda al HDMI, la pantalla del Cardputer sigue enseñando la foto; con un vídeo,
+  sólo cómo va (para no decodificarlo dos veces).
 
 Lo que pide cada aparato (DLNA es un estándar, pero cada marca lo pone a su manera):
 
@@ -140,6 +156,10 @@ src/viewmodel/               qué hace cada tecla en cada pantalla; avisa a las 
 src/platform/media_player.*  hilo que decodifica (libjpeg) y maneja ffmpeg
 src/platform/dlna_caster.*   tele: búsqueda (SSDP y mDNS), servidor HTTP de ficheros y órdenes
 src/platform/google_cast.*   conexión Google Cast (TLS con el libssl del sistema)
+src/platform/hdmi_player.*   HDMI: hilo que maneja ffmpeg para la salida HDMI
+src/platform/kms_display.*   HDMI: modo y planos por DRM/KMS (ioctls del kernel, sin libdrm)
+src/platform/ffmpeg_process.* lanzar ffmpeg/ffprobe y leer su tubería (pantalla y HDMI)
+src/model/hdmi.*             HDMI sin hardware: modo, tamaño del vídeo, ffprobe
 src/model/dlna.*             DLNA sin red: respuestas, descripciones, SOAP, tipos, cabeceras
 src/model/gcast.*            Google Cast sin red: mDNS, mensajes protobuf, JSON, peticiones
 src/platform/linux_input.*   teclado (evdev) y repetición de flechas
@@ -158,6 +178,11 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.6.0 (25-nov-2026)** — por HDMI: la lista de `V` empieza por «HDMI» con una pantalla
+enchufada. Probado en el Cardputer con la salida forzada a «conectada» y sin cable (fotos,
+vídeo 1080p a velocidad real, pausa, saltos, final, GIF; el contenido se comprobó en los planos
+de la GPU). **Sin probar con una pantalla de verdad.**
 
 **0.5.0 (24-nov-2026)** — Google Cast: los Chromecast, Google TV y Nest Hub salen en la misma
 lista de `V` y funcionan como una tele DLNA. Probado con un Google Nest Hub (el mismo código,

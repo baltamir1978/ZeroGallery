@@ -1,0 +1,465 @@
+/*
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "hdmi_player.h"
+
+#include "dlna.h"
+#include "ffmpeg_process.h"
+#include "gallery.h"
+#include "hdmi.h"
+#include "kms_display.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <functional>
+#include <vector>
+
+namespace platform {
+namespace {
+
+// Más de 30 fps a 1080p no los decodifica la CM0 por software: se tiran fotogramas.
+constexpr double kMaxFps = 30.0;
+// Por encima de 720p se salta el filtro antibloques de H.264 (como en la pantalla del
+// aparato): a 1080p es lo que deja margen para ir a velocidad real.
+constexpr long long kSkipLoopFilterPixels = 1280LL * 720;
+
+std::string seconds_text(double seconds) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.3f", seconds);
+    return text;
+}
+
+std::string size_text(int width, int height) {
+    return std::to_string(width) + ":" + std::to_string(height);
+}
+
+/** Orientación EXIF de un JPEG (1 si no es JPEG o no la lleva), del principio del fichero. */
+int jpeg_orientation(const std::string& path) {
+    if (!gallery::is_jpeg(path)) {
+        return 1;
+    }
+    std::ifstream file(path, std::ios::binary);
+    std::vector<char> head(256 * 1024);
+    file.read(head.data(), static_cast<std::streamsize>(head.size()));
+    dlna::JpegInfo info;
+    if (!dlna::parse_jpeg(reinterpret_cast<const uint8_t*>(head.data()), static_cast<size_t>(file.gcount()), info)) {
+        return 1;
+    }
+    return info.orientation;
+}
+
+/**
+ * La foto al tamaño de la pantalla, con bandas negras. Un JPEG se endereza aquí según su
+ * EXIF (-noautorotate, como al mandarlo a la tele); el resto (HEIC de móvil) lo endereza
+ * ffmpeg solo.
+ */
+std::vector<std::string> still_arguments(const std::string& path, int orientation, int width, int height) {
+    std::string filter = dlna::orientation_filter(orientation);
+    if (!filter.empty()) {
+        filter += ",";
+    }
+    filter += "scale=" + size_text(width, height) +
+              ":force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bicubic,"
+              "pad=" + size_text(width, height) + ":(ow-iw)/2:(oh-ih)/2:black,format=yuv420p";
+    std::vector<std::string> arguments = {"-nostdin", "-hide_banner", "-loglevel", "error"};
+    if (orientation != 1) {
+        arguments.push_back("-noautorotate");
+    }
+    // Sin -map: un HEIC de móvil es una rejilla de teselas que ffmpeg sólo recompone si elige él.
+    arguments.insert(arguments.end(), {"-i", path, "-frames:v", "1", "-vf", filter, "-f", "rawvideo", "pipe:1"});
+    return arguments;
+}
+
+std::string video_filter(int width, int height, double fps, double source_fps) {
+    std::string filter;
+    if (source_fps > kMaxFps + 0.5) {
+        filter = "fps=" + std::to_string(static_cast<int>(fps)) + ",";
+    }
+    return filter + "scale=" + size_text(width, height) + ":flags=bilinear,format=yuv420p";
+}
+
+} // namespace
+
+HdmiPlayer::HdmiPlayer() {
+    worker_ = std::thread([this] { run(); });
+}
+
+HdmiPlayer::~HdmiPlayer() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        quit_ = true;
+        ++request_.generation;
+    }
+    wake_.notify_all();
+    worker_.join();
+}
+
+bool HdmiPlayer::available() {
+    return !KmsDisplay::connected_card().empty();
+}
+
+void HdmiPlayer::open(const std::string& path, MediaKind kind) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++request_.generation;
+        request_.path = path;
+        request_.kind = kind;
+        seek_ = 0.0;
+        position_ = 0.0;
+        duration_ = 0.0;
+        error_.clear();
+        state_ = path.empty() ? MediaState::Idle : MediaState::Loading;
+    }
+    wake_.notify_all();
+}
+
+void HdmiPlayer::toggle_pause() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++toggles_;
+    }
+    wake_.notify_all();
+}
+
+void HdmiPlayer::seek(double seconds) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (request_.path.empty() || request_.kind != MediaKind::Video) {
+            return;
+        }
+        seek_ += seconds;
+    }
+    wake_.notify_all();
+}
+
+double HdmiPlayer::position() const {
+    return position_;
+}
+
+double HdmiPlayer::duration() const {
+    return duration_;
+}
+
+MediaState HdmiPlayer::state() const {
+    return state_;
+}
+
+std::string HdmiPlayer::error() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return error_;
+}
+
+std::string HdmiPlayer::name() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return name_;
+}
+
+bool HdmiPlayer::superseded(uint64_t generation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return request_.generation != generation;
+}
+
+void HdmiPlayer::set_state(uint64_t generation, MediaState state) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (request_.generation == generation) {
+        state_ = state;
+    }
+}
+
+void HdmiPlayer::fail(uint64_t generation, const std::string& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (request_.generation != generation) {
+        return;
+    }
+    error_ = message;
+    state_ = MediaState::Error;
+}
+
+HdmiPlayer::Event HdmiPlayer::wait_for_event(uint64_t generation, uint64_t& toggles_seen, double& seek) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    wake_.wait(lock, [&] { return request_.generation != generation || toggles_ != toggles_seen || seek_ != 0.0; });
+    if (request_.generation != generation) {
+        return Event::Superseded;
+    }
+    if (toggles_ != toggles_seen) {
+        toggles_seen = toggles_;
+        return Event::Toggled;
+    }
+    seek = seek_;
+    seek_ = 0.0;
+    return Event::Sought;
+}
+
+void HdmiPlayer::run() {
+    // La pantalla sólo la toca este hilo: se crea aquí y se apaga al salir de él.
+    KmsDisplay screen;
+    display_ = &screen;
+    uint64_t handled = 0;
+    for (;;) {
+        Request request;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            wake_.wait(lock, [&] { return quit_ || request_.generation != handled; });
+            if (quit_) {
+                break;
+            }
+            request = request_;
+            handled = request.generation;
+        }
+        if (request.path.empty()) {
+            screen.blank();
+            continue;
+        }
+        if (!ensure_display(request.generation)) {
+            continue;
+        }
+        if (request.kind == MediaKind::Still) {
+            show_still(request);
+        }
+        else {
+            play_video(request);
+        }
+    }
+    screen.close();
+    display_ = nullptr;
+}
+
+bool HdmiPlayer::ensure_display(uint64_t generation) {
+    if (display_->is_open()) {
+        return true;
+    }
+    std::string error;
+    if (!display_->open(error)) {
+        fail(generation, error);
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    name_ = "HDMI " + std::to_string(display_->width()) + "x" + std::to_string(display_->height());
+    return true;
+}
+
+/** Lee un fotograma entero; `false` si ffmpeg acaba antes, tarda más de medio minuto o se pide otra cosa. */
+static bool read_frame(FfmpegProcess& ffmpeg, std::vector<uint8_t>& frame, size_t& filled,
+                       const std::function<bool()>& abandoned) {
+    filled = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (filled < frame.size()) {
+        if (abandoned() || std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        const long count = ffmpeg.read_some(frame.data() + filled, frame.size() - filled, 100);
+        if (count < 0) {
+            return false;
+        }
+        filled += static_cast<size_t>(count);
+    }
+    return true;
+}
+
+void HdmiPlayer::show_still(const Request& request) {
+    // Pares: YUV 4:2:0 (una pantalla de 1366 de ancho pierde una columna).
+    const int width = display_->width() & ~1;
+    const int height = display_->height() & ~1;
+    FfmpegProcess ffmpeg;
+    if (!ffmpeg.start(still_arguments(request.path, jpeg_orientation(request.path), width, height))) {
+        fail(request.generation, "Cannot run ffmpeg");
+        return;
+    }
+    std::vector<uint8_t> frame(static_cast<size_t>(width) * height * 3 / 2);
+    size_t filled = 0;
+    if (!read_frame(ffmpeg, frame, filled, [&] { return superseded(request.generation); })) {
+        if (superseded(request.generation)) {
+            return;
+        }
+        const bool missing = filled == 0 && ffmpeg.finish() == kExitExecFailed;
+        fail(request.generation, missing ? "ffmpeg is not installed" : "Cannot open this image");
+        return;
+    }
+    if (superseded(request.generation)) {
+        return;
+    }
+    if (!display_->show(frame.data(), width, height)) {
+        fail(request.generation, "HDMI: cannot show the image");
+        return;
+    }
+    set_state(request.generation, MediaState::Still);
+}
+
+bool HdmiPlayer::show_video_frame(const Request& request, double seconds, int width, int height) {
+    FfmpegProcess ffmpeg;
+    if (!ffmpeg.start({"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", seconds_text(seconds), "-i",
+                       request.path, "-an", "-frames:v", "1", "-vf", video_filter(width, height, 0, 0), "-f",
+                       "rawvideo", "pipe:1"})) {
+        return false;
+    }
+    std::vector<uint8_t> frame(static_cast<size_t>(width) * height * 3 / 2);
+    size_t filled = 0;
+    if (!read_frame(ffmpeg, frame, filled, [&] { return superseded(request.generation); })) {
+        return false;
+    }
+    return display_->show(frame.data(), width, height);
+}
+
+void HdmiPlayer::play_video(const Request& request) {
+    const bool loop = request.kind == MediaKind::Animation;
+    std::string audio = loop ? std::string{} : audio_output();
+
+    const auto info = hdmi::parse_probe(probe_text(
+        {"-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height,r_frame_rate,avg_frame_rate:stream_side_data=rotation:format=duration", "-of",
+         "default=nw=1", request.path}));
+    const auto size = hdmi::video_size(info.width, info.height, display_->width(), display_->height());
+    const double fps = info.fps > 0.0 ? std::min(info.fps, kMaxFps) : 25.0;
+    const bool skip_loop_filter = static_cast<long long>(info.width) * info.height > kSkipLoopFilterPixels;
+    if (!loop) {
+        duration_ = info.duration;
+    }
+    const size_t frame_bytes = static_cast<size_t>(size.width) * size.height * 3 / 2;
+    std::vector<uint8_t> frame(frame_bytes);
+
+    uint64_t toggles_seen = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        toggles_seen = toggles_;
+    }
+    // Ni antes del principio ni, hacia delante, a menos de un segundo del final.
+    const auto landing = [&](double from, double seek) {
+        double to = std::max(0.0, from + seek);
+        if (seek > 0.0 && info.duration > 0.0) {
+            to = std::min(to, std::max(from, info.duration - 1.0));
+        }
+        return to;
+    };
+
+    double position = 0.0;
+    for (;;) {
+        std::vector<std::string> arguments = {"-nostdin", "-hide_banner", "-loglevel", "error"};
+        if (skip_loop_filter) {
+            arguments.insert(arguments.end(), {"-skip_loop_filter", "all"});
+        }
+        arguments.push_back("-re");
+        if (loop) {
+            arguments.insert(arguments.end(), {"-stream_loop", "-1"});
+        }
+        if (position > 0.05) {
+            arguments.insert(arguments.end(), {"-ss", seconds_text(position)});
+        }
+        arguments.insert(arguments.end(), {"-i", request.path, "-an", "-vf",
+                                           video_filter(size.width, size.height, fps, info.fps), "-f", "rawvideo",
+                                           "pipe:1"});
+        if (!audio.empty()) {
+            // Del mismo proceso, como en la pantalla del aparato: imagen y sonido a la par.
+            arguments.insert(arguments.end(), {"-vn", "-ac", "2", "-f", audio, audio == "pulse" ? "Gallery" : "default"});
+        }
+
+        FfmpegProcess ffmpeg;
+        if (!ffmpeg.start(arguments)) {
+            fail(request.generation, "Cannot run ffmpeg");
+            return;
+        }
+
+        size_t filled = 0;
+        long frames = 0;
+        bool paused = false;
+        double sought = 0.0;
+        for (;;) {
+            if (superseded(request.generation)) {
+                return;
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (toggles_ != toggles_seen) {
+                    toggles_seen = toggles_;
+                    paused = true;
+                }
+                if (seek_ != 0.0) {
+                    sought = seek_;
+                    seek_ = 0.0;
+                }
+            }
+            if (paused || sought != 0.0) {
+                break;
+            }
+            const long count = ffmpeg.read_some(frame.data() + filled, frame_bytes - filled, 100);
+            if (count < 0) {
+                break;
+            }
+            filled += static_cast<size_t>(count);
+            if (filled == frame_bytes) {
+                filled = 0;
+                ++frames;
+                display_->show(frame.data(), size.width, size.height);
+                if (frames == 1) {
+                    set_state(request.generation, MediaState::Playing);
+                }
+                position_ = position + static_cast<double>(frames) / fps;
+            }
+        }
+
+        position = loop ? 0.0 : position + static_cast<double>(frames) / fps;
+        if (sought != 0.0) {
+            position = landing(position, sought);
+        }
+        position_ = position;
+
+        if (sought != 0.0 && !paused) {
+            ffmpeg.stop();
+            continue;
+        }
+
+        bool ended = false;
+        if (!paused) {
+            const int exit_code = ffmpeg.finish();
+            if (exit_code == kExitExecFailed) {
+                fail(request.generation, "ffmpeg is not installed");
+                return;
+            }
+            if (exit_code != 0 && !audio.empty()) {
+                // Sin pista de sonido, o la salida de sonido no se deja abrir: sólo imagen.
+                audio.clear();
+                continue;
+            }
+            if (frames == 0 && position <= 0.0) {
+                fail(request.generation, "Cannot play this video");
+                return;
+            }
+            ended = true;
+        }
+        ffmpeg.stop();
+
+        // Parado: en la pantalla se queda el último fotograma (el plano no se toca).
+        set_state(request.generation, ended ? MediaState::Ended : MediaState::Paused);
+        double at = ended ? std::max(0.0, position - 1.0 / fps) : position;
+        bool resume = false;
+        while (!resume) {
+            double seek = 0.0;
+            const Event event = wait_for_event(request.generation, toggles_seen, seek);
+            if (event == Event::Superseded) {
+                return;
+            }
+            if (event == Event::Toggled) {
+                // Reanudar, o volver a empezar si había acabado.
+                position = ended ? 0.0 : at;
+                resume = true;
+                break;
+            }
+            if (ended) {
+                if (seek < 0.0) {
+                    position = std::max(0.0, at + seek);
+                    resume = true;
+                }
+                continue;
+            }
+            at = landing(at, seek);
+            position_ = at;
+            show_video_frame(request, at, size.width, size.height);
+        }
+        position_ = position;
+        set_state(request.generation, MediaState::Loading);
+    }
+}
+
+} // namespace platform

@@ -4,6 +4,7 @@
 
 #include "media_player.h"
 
+#include "ffmpeg_process.h"
 #include "gallery.h"
 
 #include <algorithm>
@@ -36,15 +37,9 @@ namespace {
 // 1 GHz, sin decodificación por hardware aquí) margen para vídeos de móvil a 1080p.
 constexpr int kVideoFps = 15;
 constexpr size_t kFrameBytes = kCanvasPixels * sizeof(uint16_t);
-constexpr int kExitExecFailed = 127;
 
 uint16_t rgb565(unsigned r, unsigned g, unsigned b) {
     return static_cast<uint16_t>(((r & 0xF8U) << 8) | ((g & 0xFCU) << 3) | (b >> 3));
-}
-
-const char* env_or(const char* name, const char* fallback) {
-    const char* value = std::getenv(name);
-    return value && value[0] != '\0' ? value : fallback;
 }
 
 // ---------------------------------------------------------------- JPEG
@@ -205,130 +200,6 @@ bool load_jpeg(const std::string& path, int canvas_width, int canvas_height, std
 }
 
 // ---------------------------------------------------------------- ffmpeg
-
-/** Un `ffmpeg` en marcha que escribe fotogramas en crudo por una tubería. */
-class Ffmpeg {
-public:
-    Ffmpeg() = default;
-    ~Ffmpeg() { stop(); }
-
-    Ffmpeg(const Ffmpeg&) = delete;
-    Ffmpeg& operator=(const Ffmpeg&) = delete;
-
-    /** `tool` es «ffmpeg» o «ffprobe»: `ZEROGALLERY_FFMPEG` sólo cambia el primero. */
-    bool start(const std::vector<std::string>& arguments, const char* tool = "ffmpeg") {
-        stop();
-        int ends[2];
-        if (pipe2(ends, O_CLOEXEC) != 0) {
-            return false;
-        }
-
-        // argv se prepara antes del fork: entre fork y exec, en un proceso con hilos,
-        // no se puede reservar memoria.
-        const std::string program = std::strcmp(tool, "ffmpeg") == 0 ? env_or("ZEROGALLERY_FFMPEG", "ffmpeg") : tool;
-        std::vector<char*> argv;
-        argv.push_back(const_cast<char*>(program.c_str()));
-        for (const auto& argument : arguments) {
-            argv.push_back(const_cast<char*>(argument.c_str()));
-        }
-        argv.push_back(nullptr);
-
-        const pid_t parent = getpid();
-        const pid_t pid = fork();
-        if (pid < 0) {
-            ::close(ends[0]);
-            ::close(ends[1]);
-            return false;
-        }
-        if (pid == 0) {
-#ifdef __linux__
-            // Si la galería muere, ffmpeg no debe quedarse sonando de fondo.
-            prctl(PR_SET_PDEATHSIG, SIGKILL);
-            if (getppid() != parent) {
-                _exit(kExitExecFailed);
-            }
-#endif
-            dup2(ends[1], STDOUT_FILENO);
-            const int null = ::open("/dev/null", O_RDWR);
-            if (null >= 0) {
-                dup2(null, STDIN_FILENO);
-                dup2(null, STDERR_FILENO);
-            }
-            execvp(argv[0], argv.data());
-            _exit(kExitExecFailed);
-        }
-
-        ::close(ends[1]);
-        pid_ = pid;
-        fd_ = ends[0];
-        exit_code_ = -1;
-        return true;
-    }
-
-    /**
-     * Lee hasta `size` bytes esperando como mucho `timeout_ms`.
-     * Devuelve los leídos, 0 si no ha llegado nada todavía y -1 si ffmpeg ha terminado.
-     */
-    long read_some(uint8_t* buffer, size_t size, int timeout_ms) {
-        if (fd_ < 0) {
-            return -1;
-        }
-        pollfd waiting{fd_, POLLIN, 0};
-        const int ready = poll(&waiting, 1, timeout_ms);
-        if (ready == 0 || (ready < 0 && errno == EINTR)) {
-            return 0;
-        }
-        if (ready < 0) {
-            return -1;
-        }
-        const auto count = ::read(fd_, buffer, size);
-        if (count > 0) {
-            return static_cast<long>(count);
-        }
-        if (count < 0 && (errno == EINTR || errno == EAGAIN)) {
-            return 0;
-        }
-        return -1;
-    }
-
-    void stop() {
-        if (fd_ >= 0) {
-            ::close(fd_);
-            fd_ = -1;
-        }
-        if (pid_ > 0) {
-            // SIGKILL y no SIGTERM: no hay nada que ffmpeg tenga que guardar y así el
-            // cambio de vídeo es inmediato.
-            kill(pid_, SIGKILL);
-            int status = 0;
-            while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {
-            }
-            exit_code_ = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-            pid_ = -1;
-        }
-    }
-
-    /** Recoge el código de salida cuando ffmpeg ha terminado por su cuenta. */
-    int finish() {
-        if (fd_ >= 0) {
-            ::close(fd_);
-            fd_ = -1;
-        }
-        if (pid_ > 0) {
-            int status = 0;
-            while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {
-            }
-            exit_code_ = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-            pid_ = -1;
-        }
-        return exit_code_;
-    }
-
-private:
-    pid_t pid_{-1};
-    int fd_{-1};
-    int exit_code_{-1};
-};
 
 /** Ancho del lienzo tal como se va a ver: con el aparato de lado, el alto de la pantalla. */
 int upright_width(int turns) {
@@ -601,7 +472,7 @@ void MediaPlayer::run() {
  * Lee de ffmpeg un fotograma entero. `false` si no llega (ffmpeg acaba antes, tarda más de
  * medio minuto) o si mientras tanto se pide otra cosa.
  */
-static bool read_frame(Ffmpeg& ffmpeg, std::vector<uint16_t>& upright, size_t& filled, const std::function<bool()>& abandoned) {
+static bool read_frame(FfmpegProcess& ffmpeg, std::vector<uint16_t>& upright, size_t& filled, const std::function<bool()>& abandoned) {
     upright.resize(kCanvasPixels);
     filled = 0;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -629,7 +500,7 @@ void MediaPlayer::show_still(const Request& request, int turns) {
     }
 
     // Lo que libjpeg no abre (otros formatos, o un JPEG en CMYK) se le deja a ffmpeg.
-    Ffmpeg ffmpeg;
+    FfmpegProcess ffmpeg;
     if (!ffmpeg.start(still_arguments(request.path, turns))) {
         fail(request.generation, "Cannot run ffmpeg");
         return;
@@ -648,7 +519,7 @@ void MediaPlayer::show_still(const Request& request, int turns) {
 }
 
 bool MediaPlayer::show_video_frame(const Request& request, double seconds, int turns, MediaState state) {
-    Ffmpeg ffmpeg;
+    FfmpegProcess ffmpeg;
     if (!ffmpeg.start(video_frame_arguments(request.path, seconds, turns))) {
         return false;
     }
@@ -663,71 +534,14 @@ bool MediaPlayer::show_video_frame(const Request& request, double seconds, int t
     return true;
 }
 
-/** Hay alguna tarjeta de sonido. Sin ninguna, ni se intenta sacar audio por ALSA. */
-static bool has_sound_card() {
-    std::FILE* cards = std::fopen("/proc/asound/cards", "r");
-    if (!cards) {
-        return false;
-    }
-    char line[128];
-    bool found = false;
-    while (std::fgets(line, sizeof(line), cards)) {
-        if (std::strchr(line, '[')) { // «0 [Headphones ]: ...»
-            found = true;
-            break;
-        }
-    }
-    std::fclose(cards);
-    return found;
-}
-
-/**
- * Por dónde sacar el sonido. El Cardputer Zero lleva PipeWire (con su servidor compatible
- * con PulseAudio), que es quien decide si suena el altavoz, los auriculares o un altavoz
- * Bluetooth y quien aplica el volumen del sistema: si está, se le entrega a él y no se
- * elige salida aquí. ALSA a pelo queda para sistemas sin PipeWire.
- * `ZEROGALLERY_AUDIO=none|pulse|alsa` lo fuerza.
- */
-static std::string audio_output() {
-    const std::string forced = env_or("ZEROGALLERY_AUDIO", "");
-    if (forced == "none") {
-        return {};
-    }
-    if (forced == "pulse" || forced == "alsa") {
-        return forced;
-    }
-
-    std::string runtime = env_or("XDG_RUNTIME_DIR", "");
-    if (runtime.empty()) {
-        runtime = "/run/user/" + std::to_string(getuid());
-    }
-    if (access((runtime + "/pulse/native").c_str(), F_OK) == 0) {
-        return "pulse";
-    }
-    return has_sound_card() ? "alsa" : "";
-}
-
 /**
  * Lo que dura el vídeo en segundos, preguntado a `ffprobe` (viene con ffmpeg); 0 si no lo
  * dice. Hace falta para que saltar adelante no se pase del final: un `-ss` más allá no da
  * ningún fotograma y la cuenta se quedaría en un sitio que no existe.
  */
 static double video_duration(const std::string& path) {
-    Ffmpeg probe;
-    if (!probe.start({"-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path}, "ffprobe")) {
-        return 0.0;
-    }
-    char text[64] = {};
-    size_t filled = 0;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (filled < sizeof(text) - 1 && std::chrono::steady_clock::now() < deadline) {
-        const long count = probe.read_some(reinterpret_cast<uint8_t*>(text) + filled, sizeof(text) - 1 - filled, 100);
-        if (count < 0) {
-            break;
-        }
-        filled += static_cast<size_t>(count);
-    }
-    const double seconds = std::atof(text);
+    const std::string text = probe_text({"-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path});
+    const double seconds = std::atof(text.c_str());
     return seconds > 0.0 ? seconds : 0.0;
 }
 
@@ -816,7 +630,7 @@ void MediaPlayer::play_video(const Request& request) {
     // congelarlo y soltarlo después lo haría correr para recuperar el tiempo perdido. Y el
     // giro cambia el tamaño al que ffmpeg encaja la imagen, que va en sus argumentos.
     for (;;) {
-        Ffmpeg ffmpeg;
+        FfmpegProcess ffmpeg;
         if (!ffmpeg.start(video_arguments(request.path, position, audio, loop, turns))) {
             fail(request.generation, "Cannot run ffmpeg");
             return;

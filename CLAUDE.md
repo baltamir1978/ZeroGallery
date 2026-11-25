@@ -125,6 +125,31 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 - **El cortafuegos del portátil (`ufw`) no deja probar con la tele desde el PC**: se come las
   respuestas SSDP y no dejaría a la tele bajarse el fichero. Se prueba desde el aparato, que no
   tiene cortafuegos y está en la misma Wi-Fi que la LG.
+- **HDMI (0.6.0) sin libdrm ni mpv**: `platform/kms_display.*` usa los ioctls del kernel
+  (`drm/drm_mode.h`): abre la tarjeta que tenga un HDMI `connected` en /sys (`card0`, `vc4`; la
+  pantalla interna es `card1`, el panel SPI, y no se toca), pone el modo con un fondo XR24 negro
+  y cada fotograma va a un **plano superpuesto YU12** que la GPU escala y centra. `ffmpeg`
+  entrega I420 por la tubería (`platform/hdmi_player.*`): las fotos al tamaño de la pantalla,
+  los vídeos al suyo si cabe (`hdmi::video_size`). Por qué así y no otra cosa (probado el
+  25-nov-2026 en `cpzero`):
+  - Con `gpu_mem=16` el firmware es `start_cd` y **no hay decodificador por hardware**
+    (`h264_v4l2m2m` no tiene dispositivo). No hace falta: un H.264 1080p se decodifica a 1,6×
+    (2× sin el filtro antibloques, que se salta por encima de 720p) y la copia al búfer DRM tarda
+    menos de 27 ms el peor fotograma. 186 % de CPU con un 1080p reducido a 1024×576; 8 % un 320×240.
+  - La salida `vout_drm` del ffmpeg de Raspberry Pi **no sirve**: sólo pinta en una CRTC ya
+    encendida por otro y sólo acepta fotogramas DRM PRIME (los da el decodificador por hardware;
+    `hwupload` a DRM no existe).
+  - `mpv` sería una dependencia de cientos de MB para lo mismo.
+  - La app es la dueña (DRM master) de `card0` mientras manda al HDMI; con lightdm en marcha
+    `SETCRTC` da EACCES y se avisa. Al dejar de mandar se apaga la salida (la tele dice «sin señal»).
+  - El sonido no va por HDMI (`snd_bcm2835.enable_hdmi=0` en `cpzero`): va por PipeWire, como siempre.
+- **Probar el HDMI sin cable**: `sudo sh -c 'echo on > /sys/class/drm/card0-HDMI-A-1/status'`
+  lo da por conectado (modos de serie, 1024×768) y `echo detect` lo devuelve. Lo que hay en
+  cada plano se ve en `sudo cat /sys/kernel/debug/dri/0/state` (tamaño y formato del búfer) y
+  quién es el dueño en `.../clients`; `kmsgrab` no captura planos YUV. Para probar sin interfaz
+  se compila con `aarch64-linux-gnu-g++` un `main` que use `HdmiPlayer` con
+  `hdmi_player.cpp kms_display.cpp ffmpeg_process.cpp` y `model/{hdmi,gallery,dlna}.cpp`
+  (`-static-libstdc++`), con `ZEROGALLERY_AUDIO=none` para que no suene.
 - **Las teclas del aparato** pasan por `map_evdev_key` (`linux_input.cpp`), que sólo deja pasar
   las letras que usa la app: una tecla nueva hay que añadirla ahí (la `V` faltaba y en el
   simulador sí iba).
@@ -143,14 +168,9 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Pendiente
 
-- **Mandar por HDMI** (Bruno quiere tenerlo apuntado, 24-nov-2026). Idea: con un cable HDMI
-  puesto (`/sys/class/drm/card*-HDMI-A-1/status` = `connected`), que `V` ofrezca también
-  «HDMI» en la lista de teles y el visor pinte la foto o el vídeo a resolución completa en esa
-  salida por DRM/KMS (p. ej. lanzando `mpv --vo=drm --hwdec=v4l2m2m-copy` o ffmpeg a un plano
-  KMS), con la decodificación H.264 por hardware de la CM0. Choca con lo que hace ZeroPower: el
-  escritorio HDMI (lightdm) está apagado en `cpzero` y se recomendó `gpu_mem=16`, que no
-  bastaría para la decodificación por hardware. Bruno dice que no usa HDMI: por eso va detrás
-  de DLNA.
+- **Probar el HDMI con un cable y una pantalla de verdad** (Bruno lo hará más adelante): que
+  la imagen se vea (colores, encaje, sin tirones), el modo que coge con su EDID y desenchufar con
+  algo en marcha.
 - **Probar Cast en el Chromecast HD (Google TV) de la granja**: con el Nest Hub funciona todo,
   pero el Chromecast no se ha visto nunca encendido (Bruno lo probará allí).
 - **Probar en Samsung, Sony y Hisense** (teles de amigos de Bruno): están los arreglos
@@ -158,6 +178,13 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.6.0 (25-nov-2026)**: por HDMI (ver «Decisiones»). `V` lista «HDMI» primero si hay algo
+  enchufado. Probado en `cpzero` con el conector forzado y sin cable: el reproductor (foto JPEG y
+  PNG, vídeo 1080p y 320×240, pausa, saltos parado y en marcha, final y volver a empezar, GIF)
+  con un programa de prueba, y la interfaz con ZeroRemote (lista con «HDMI» y la LG, foto,
+  pasar a la siguiente, vídeo con su reloj y pausa, `V` suelta la tarjeta). El reproductor de
+  la pantalla pasa a usar `platform/ffmpeg_process.*`, compartido con el HDMI (sin cambios a la
+  vista). **Sin probar con una pantalla de verdad** ni el sonido del vídeo mandado al HDMI.
 - **0.5.0 (24-nov-2026)**: Google Cast. Probado con un Google Nest Hub de la granja desde
   `granja-pi` (búsqueda, foto, música con carátula y su final, vídeo, saltar, pausa, volumen);
   la LG sigue igual (probado desde el aparato). **Sin probar por Bruno** y sin probar en el

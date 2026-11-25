@@ -17,6 +17,8 @@ static_assert(LV_KEY_NEXT == 9 && LV_KEY_PREV == 11 && LV_KEY_HOME == 2 && LV_KE
 
 // Filas que caben en la lista: es lo que avanza una página.
 constexpr long kPageRows = 6;
+// Cada cuánto se mira si han enchufado o desenchufado el HDMI con la lista abierta.
+constexpr uint32_t kHdmiCheckMs = 1000;
 
 } // namespace
 
@@ -80,7 +82,7 @@ platform::DlnaCaster* BaseViewModel::caster() const {
 }
 
 bool BaseViewModel::casting() const {
-    return caster_ && caster_->active();
+    return hdmi_ || (caster_ && caster_->active());
 }
 
 bool BaseViewModel::picker_open() const {
@@ -89,6 +91,96 @@ bool BaseViewModel::picker_open() const {
 
 size_t BaseViewModel::picker_selection() const {
     return picker_selection_;
+}
+
+bool BaseViewModel::hdmi_listed() {
+    if (!hdmi_checked_once_ || lv_tick_elaps(hdmi_checked_) >= kHdmiCheckMs) {
+        hdmi_checked_once_ = true;
+        hdmi_checked_ = lv_tick_get();
+        hdmi_listed_ = platform::HdmiPlayer::available();
+    }
+    return hdmi_listed_;
+}
+
+std::vector<std::string> BaseViewModel::picker_names() {
+    std::vector<std::string> names;
+    if (hdmi_listed()) {
+        names.emplace_back("HDMI");
+    }
+    if (caster_) {
+        for (const auto& renderer : caster_->renderers()) {
+            names.push_back(renderer.name);
+        }
+    }
+    return names;
+}
+
+uint32_t BaseViewModel::picker_version() {
+    const uint32_t tvs = caster_ ? caster_->renderers_version() : 0;
+    return tvs * 2 + (hdmi_listed() ? 1 : 0);
+}
+
+namespace {
+
+platform::CastState cast_state_of(platform::MediaState state) {
+    switch (state) {
+        case platform::MediaState::Still:
+            return platform::CastState::Showing;
+        case platform::MediaState::Playing:
+            return platform::CastState::Playing;
+        case platform::MediaState::Paused:
+            return platform::CastState::Paused;
+        case platform::MediaState::Ended:
+            return platform::CastState::Stopped;
+        case platform::MediaState::Error:
+            return platform::CastState::Error;
+        default:
+            return platform::CastState::Sending;
+    }
+}
+
+} // namespace
+
+std::string BaseViewModel::output_name() const {
+    if (hdmi_) {
+        return hdmi_->name();
+    }
+    return caster_ ? caster_->tv_name() : std::string{};
+}
+
+platform::CastState BaseViewModel::output_state() const {
+    if (hdmi_) {
+        return cast_state_of(hdmi_->state());
+    }
+    return caster_ ? caster_->state() : platform::CastState::Off;
+}
+
+std::string BaseViewModel::output_error() const {
+    if (hdmi_) {
+        return hdmi_->error();
+    }
+    return caster_ ? caster_->error() : std::string{};
+}
+
+double BaseViewModel::output_position() const {
+    if (hdmi_) {
+        return hdmi_->position();
+    }
+    return caster_ ? caster_->position() : 0.0;
+}
+
+double BaseViewModel::output_duration() const {
+    if (hdmi_) {
+        return hdmi_->duration();
+    }
+    return caster_ ? caster_->duration() : 0.0;
+}
+
+std::string BaseViewModel::take_output_notice() {
+    if (hdmi_) {
+        return {};
+    }
+    return caster_ ? caster_->take_notice() : std::string{};
 }
 
 const gallery::Session& BaseViewModel::session() const {
@@ -191,14 +283,24 @@ bool BaseViewModel::handle_viewer(gallery::Action action) {
     const auto* entry = session_.selected_entry();
     const bool video = entry && entry->kind == gallery::Kind::Video;
     const int seek = gallery::seek_seconds_for(action);
-    // Con el vídeo en la tele, saltar y pausar es cosa de la tele.
+    // Con el vídeo en la tele (o en el HDMI), saltar y pausar es cosa de allí.
     if (video && casting()) {
         if (seek != 0) {
-            caster_->seek(seek);
+            if (hdmi_) {
+                hdmi_->seek(seek);
+            }
+            else {
+                caster_->seek(seek);
+            }
             return true;
         }
         if (action == gallery::Action::Select) {
-            caster_->toggle_pause();
+            if (hdmi_) {
+                hdmi_->toggle_pause();
+            }
+            else {
+                caster_->toggle_pause();
+            }
             return true;
         }
     }
@@ -259,7 +361,7 @@ void BaseViewModel::show_page(model::AppPage page) {
 }
 
 bool BaseViewModel::handle_picker(gallery::Action action) {
-    const size_t count = caster_ ? caster_->renderers().size() : 0;
+    const size_t count = picker_names().size();
     switch (action) {
         case gallery::Action::Up:
             if (picker_selection_ > 0) {
@@ -278,7 +380,27 @@ bool BaseViewModel::handle_picker(gallery::Action action) {
             if (picker_selection_ >= count) {
                 return true;
             }
-            tv_ = caster_->renderers()[picker_selection_];
+            const bool hdmi = hdmi_listed();
+            if (hdmi && picker_selection_ == 0) {
+                // Al HDMI: lo que se mandara a una tele se deja.
+                if (caster_ && caster_->active()) {
+                    caster_->stop();
+                }
+                if (!hdmi_) {
+                    hdmi_ = std::make_unique<platform::HdmiPlayer>();
+                }
+                hdmi_chosen_ = true;
+            }
+            else {
+                const auto renderers = caster_ ? caster_->renderers() : std::vector<dlna::Renderer>{};
+                const size_t index = picker_selection_ - (hdmi ? 1 : 0);
+                if (index >= renderers.size()) {
+                    return true;
+                }
+                tv_ = renderers[index];
+                hdmi_.reset(); // apaga la salida HDMI
+                hdmi_chosen_ = false;
+            }
             close_picker();
             cast_selected();
             // El visor vuelve a mirar: un vídeo ya no se reproduce aquí sino en la tele.
@@ -300,12 +422,16 @@ void BaseViewModel::open_picker() {
         caster_ = std::make_unique<platform::DlnaCaster>();
     }
     caster_->start_discovery();
-    // La última tele usada sale ya señalada, si sigue en la lista.
+    // Lo último usado sale ya señalado, si sigue en la lista.
+    hdmi_checked_once_ = false;
+    const size_t first_tv = hdmi_listed() ? 1 : 0;
     picker_selection_ = 0;
-    const auto renderers = caster_->renderers();
-    for (size_t i = 0; i < renderers.size(); ++i) {
-        if (renderers[i].udn == tv_.udn) {
-            picker_selection_ = i;
+    if (!hdmi_chosen_ || first_tv == 0) {
+        const auto renderers = caster_->renderers();
+        for (size_t i = 0; i < renderers.size(); ++i) {
+            if (renderers[i].udn == tv_.udn) {
+                picker_selection_ = first_tv + i;
+            }
         }
     }
     picker_open_ = true;
@@ -324,6 +450,7 @@ void BaseViewModel::stop_casting() {
     if (caster_) {
         caster_->stop();
     }
+    hdmi_.reset();
     cast_subject_.set(cast_subject_.value() + 1);
     // Un vídeo que estaba en la tele vuelve a verse aquí.
     if (page_ == model::AppPage::Viewer) {
@@ -332,11 +459,23 @@ void BaseViewModel::stop_casting() {
 }
 
 void BaseViewModel::cast_selected() {
-    if (!caster_ || tv_.av_transport.empty()) {
-        return;
-    }
     const auto* entry = session_.selected_entry();
     if (!entry || entry->kind == gallery::Kind::Folder) {
+        return;
+    }
+    if (hdmi_) {
+        auto kind = platform::MediaKind::Still;
+        if (entry->kind == gallery::Kind::Video) {
+            kind = platform::MediaKind::Video;
+        }
+        else if (gallery::is_animated_format(entry->name)) {
+            kind = platform::MediaKind::Animation;
+        }
+        hdmi_->open(session_.selected_path().string(), kind);
+        cast_subject_.set(cast_subject_.value() + 1);
+        return;
+    }
+    if (!caster_ || tv_.av_transport.empty()) {
         return;
     }
     caster_->cast(tv_, session_.selected_path().string(), entry->kind == gallery::Kind::Video);

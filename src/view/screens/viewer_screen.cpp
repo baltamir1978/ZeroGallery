@@ -294,8 +294,8 @@ void ViewerScreen::poll() {
 }
 
 bool ViewerScreen::poll_cast() {
-    auto* caster = view_model().caster();
-    if (!caster || !caster->active()) {
+    auto& vm = view_model();
+    if (!vm.casting()) {
         if (cast_status_) {
             cast_status_ = false;
             cast_text_.clear();
@@ -306,7 +306,7 @@ bool ViewerScreen::poll_cast() {
         return false;
     }
 
-    if (const std::string notice = caster->take_notice(); !notice.empty()) {
+    if (const std::string notice = vm.take_output_notice(); !notice.empty()) {
         lv_label_set_text(caption_, notice.c_str());
         lv_obj_remove_flag(caption_, LV_OBJ_FLAG_HIDDEN);
         caption_since_ = lv_tick_get();
@@ -314,20 +314,20 @@ bool ViewerScreen::poll_cast() {
         place_overlays();
     }
 
-    const auto state = caster->state();
+    const auto state = vm.output_state();
     if (state != cast_seen_) {
         cast_seen_ = state;
         cast_state_since_ = lv_tick_get();
     }
     const uint32_t since = lv_tick_elaps(cast_state_since_);
-    const std::string tv = caster->tv_name();
+    const std::string tv = vm.output_name();
     const char* icon = view::ICON_TELEVISION;
     std::string text;
     switch (state) {
         case platform::CastState::Sending:
             // Una foto suele llegar en un par de segundos: el aviso, sólo si tarda.
             if (tv_video_ || since >= kLoadingNoticeMs) {
-                text = "Sending to TV...";
+                text = tv.empty() ? "Sending to TV..." : "Sending to " + tv + "...";
             }
             break;
         case platform::CastState::Showing:
@@ -341,21 +341,21 @@ bool ViewerScreen::poll_cast() {
                 if (state == platform::CastState::Paused) {
                     icon = view::ICON_PAUSE;
                 }
-                text = tv + "\n" + clock_text(caster->position());
-                if (caster->duration() > 0) {
-                    text += " / " + clock_text(caster->duration());
+                text = tv + "\n" + clock_text(vm.output_position());
+                if (vm.output_duration() > 0) {
+                    text += " / " + clock_text(vm.output_duration());
                 }
             }
             break;
         case platform::CastState::Stopped:
             if (tv_video_) {
                 icon = view::ICON_PLAY;
-                text = "Ended on the TV";
+                text = "Ended on " + tv;
             }
             break;
         case platform::CastState::Error:
             icon = view::ICON_WARNING;
-            text = caster->error();
+            text = vm.output_error();
             break;
         default:
             break;
@@ -430,14 +430,10 @@ void ViewerScreen::update_picker() {
         }
         return;
     }
-    auto* caster = view_model().caster();
-    if (!caster) {
-        return;
-    }
     if (!picker_was_open_) {
         picker_was_open_ = true;
         picker_opened_ = lv_tick_get();
-        picker_version_seen_ = caster->renderers_version() + 1; // que se pinte
+        picker_version_seen_ = view_model().picker_version() + 1; // que se pinte
         picker_empty_hint_ = false;
         lv_obj_remove_flag(picker_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(picker_);
@@ -448,16 +444,17 @@ void ViewerScreen::update_picker() {
     lv_obj_set_style_text_color(picker_title_, colors.text, 0);
     lv_obj_set_style_text_color(picker_hint_, colors.text_disabled, 0);
 
-    const auto renderers = caster->renderers();
+    const auto renderers = view_model().picker_names();
+    const uint32_t version = view_model().picker_version();
     const bool empty_hint = renderers.empty() && lv_tick_elaps(picker_opened_) >= kNoTvHintMs;
     // Se repinta sólo si cambia algo: esto se llama en cada vuelta del temporizador.
     const int32_t selection = static_cast<int32_t>(view_model().picker_selection());
     const int32_t dark = view_model().is_dark_mode() ? 1 : 0;
-    if (picker_version_seen_ == caster->renderers_version() && picker_drawn_selection_ == selection && picker_drawn_dark_ == dark &&
+    if (picker_version_seen_ == version && picker_drawn_selection_ == selection && picker_drawn_dark_ == dark &&
         picker_empty_hint_ == empty_hint) {
         return;
     }
-    picker_version_seen_ = caster->renderers_version();
+    picker_version_seen_ = version;
     picker_drawn_selection_ = selection;
     picker_drawn_dark_ = dark;
     picker_empty_hint_ = empty_hint;
@@ -475,7 +472,7 @@ void ViewerScreen::update_picker() {
             continue;
         }
         lv_obj_remove_flag(row, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(row, renderers[index].name.c_str());
+        lv_label_set_text(row, renderers[index].c_str());
         const bool selected = static_cast<int32_t>(index) == selection;
         lv_obj_set_style_bg_color(row, colors.primary, 0);
         lv_obj_set_style_bg_opa(row, selected ? LV_OPA_30 : LV_OPA_TRANSP, 0);

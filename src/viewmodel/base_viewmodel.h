@@ -6,6 +6,7 @@
 
 #include "app_page.h"
 #include "dlna_caster.h"
+#include "hdmi_player.h"
 #include "gallery.h"
 #include "subjects.h"
 
@@ -13,6 +14,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace viewmodel {
@@ -53,10 +55,24 @@ public:
 
     /** Lo que manda a la tele; null hasta la primera vez que se pulsa V. */
     platform::DlnaCaster* caster() const;
+    /** Si se está mandando a una tele o al HDMI. */
     bool casting() const;
     bool picker_open() const;
-    /** Tele señalada en la lista (índice en `caster()->renderers()`). */
+    /** Fila señalada en la lista (índice en `picker_names()`). */
     size_t picker_selection() const;
+    /** Lo que sale en la lista: «HDMI» primero si hay algo enchufado, y luego las teles. */
+    std::vector<std::string> picker_names();
+    /** Cambia cada vez que cambia la lista. */
+    uint32_t picker_version();
+
+    // Cómo va lo que se está mandando, venga de una tele o del HDMI (para el visor).
+    std::string output_name() const;
+    platform::CastState output_state() const;
+    std::string output_error() const;
+    double output_position() const;
+    double output_duration() const;
+    /** Aviso pasajero; vacío si no hay. */
+    std::string take_output_notice();
 
     const gallery::Session& session() const;
 
@@ -84,6 +100,8 @@ private:
     void open_picker();
     void close_picker();
     void stop_casting();
+    /** Si hay que poner «HDMI» en la lista (se mira /sys como mucho una vez por segundo). */
+    bool hdmi_listed();
     /** Manda a la tele lo señalado, si se está mandando y es una foto o un vídeo. */
     void cast_selected();
     /** El visor tiene que enseñar otra cosa (y la tele también, si se está mandando). */
@@ -106,6 +124,12 @@ private:
     int seek_seconds_{0};
     std::unique_ptr<platform::DlnaCaster> caster_;
     dlna::Renderer tv_;
+    // Salida HDMI: existe mientras se está mandando a ella.
+    std::unique_ptr<platform::HdmiPlayer> hdmi_;
+    bool hdmi_chosen_{false}; // lo último elegido fue el HDMI (sale señalado al abrir la lista)
+    bool hdmi_listed_{false};
+    uint32_t hdmi_checked_{0};
+    bool hdmi_checked_once_{false};
     bool picker_open_{false};
     size_t picker_selection_{0};
 };
