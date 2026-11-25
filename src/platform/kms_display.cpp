@@ -241,7 +241,49 @@ bool KmsDisplay::open(std::string& error) {
         close();
         return false;
     }
+    drop_background();
+
+    present_quit_ = false;
+    presenter_ = std::thread([this] { present_loop(); });
     return true;
+}
+
+void KmsDisplay::drop_background() {
+    // El fondo negro sólo hacía falta para poner el modo (SETCRTC pide un búfer). Apagado, la
+    // GPU rellena de negro lo que no tapa la foto o el vídeo sin leer nada de memoria: a
+    // 1920×1200 y 60 Hz son 550 MB/s menos, y sin eso la GPU no acepta una foto a pantalla
+    // completa encima (SETPLANE da ENOSPC: su cuenta de ancho de banda no da para los dos).
+    // Para tocar el plano primario hay que pedir los «universal planes».
+    drm_set_client_cap cap{};
+    cap.capability = DRM_CLIENT_CAP_UNIVERSAL_PLANES;
+    cap.value = 1;
+    if (drm_ioctl(fd_, DRM_IOCTL_SET_CLIENT_CAP, &cap) != 0) {
+        return;
+    }
+    drm_mode_get_plane_res count{};
+    if (drm_ioctl(fd_, DRM_IOCTL_MODE_GETPLANERESOURCES, &count) != 0 || count.count_planes == 0) {
+        return;
+    }
+    std::vector<uint32_t> planes(count.count_planes);
+    drm_mode_get_plane_res list{};
+    list.count_planes = count.count_planes;
+    list.plane_id_ptr = user_pointer(planes.data());
+    if (drm_ioctl(fd_, DRM_IOCTL_MODE_GETPLANERESOURCES, &list) != 0) {
+        return;
+    }
+    for (uint32_t id : planes) {
+        drm_mode_get_plane plane{};
+        plane.plane_id = id;
+        if (drm_ioctl(fd_, DRM_IOCTL_MODE_GETPLANE, &plane) != 0 || plane.fb_id != background_.fb) {
+            continue;
+        }
+        drm_mode_set_plane off{};
+        off.plane_id = id;
+        if (drm_ioctl(fd_, DRM_IOCTL_MODE_SETPLANE, &off) == 0) {
+            destroy_buffer(background_);
+        }
+        return;
+    }
 }
 
 bool KmsDisplay::create_buffer(Buffer& buffer, int width, int height, bool yuv) {
@@ -309,7 +351,7 @@ void KmsDisplay::destroy_buffer(Buffer& buffer) {
     buffer = Buffer{};
 }
 
-bool KmsDisplay::show(const uint8_t* frame, int width, int height) {
+bool KmsDisplay::show(const uint8_t* frame, int width, int height, bool wait) {
     if (fd_ < 0 || width < 2 || height < 2 || (width & 1) || (height & 1)) {
         return false;
     }
@@ -333,8 +375,25 @@ bool KmsDisplay::show(const uint8_t* frame, int width, int height) {
         frame_height_ = height;
     }
 
-    Buffer& buffer = frames_[static_cast<size_t>(next_)];
-    next_ = 1 - next_;
+    // Un búfer que no esté en pantalla ni cambiándose. Con tres siempre hay uno, salvo que el
+    // tercero espere turno: entonces ese fotograma se tira y se escribe encima (si llegan más
+    // deprisa de lo que refresca la pantalla, se ve el último, sin retrasarse).
+    int index = -1;
+    {
+        std::lock_guard<std::mutex> lock(present_mutex_);
+        for (int i = 0; i < static_cast<int>(frames_.size()); ++i) {
+            if (i != shown_ && i != in_flight_ && i != pending_) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            index = pending_;
+            pending_ = -1;
+        }
+    }
+
+    Buffer& buffer = frames_[static_cast<size_t>(index)];
     const size_t luma = static_cast<size_t>(width) * height;
     const size_t chroma = luma / 4;
     const int half_width = width / 2;
@@ -359,39 +418,97 @@ bool KmsDisplay::show(const uint8_t* frame, int width, int height) {
         }
     }
 
-    const auto fit = gallery::fit_rect(width, height, width_, height_);
-    drm_mode_set_plane set{};
-    set.plane_id = plane_;
-    set.crtc_id = crtc_;
-    set.fb_id = buffer.fb;
-    set.crtc_x = fit.x;
-    set.crtc_y = fit.y;
-    set.crtc_w = static_cast<uint32_t>(fit.width);
-    set.crtc_h = static_cast<uint32_t>(fit.height);
-    // Origen en 16.16.
-    set.src_w = static_cast<uint32_t>(width) << 16;
-    set.src_h = static_cast<uint32_t>(height) << 16;
-    if (drm_ioctl(fd_, DRM_IOCTL_MODE_SETPLANE, &set) != 0) {
-        return false;
+    std::unique_lock<std::mutex> lock(present_mutex_);
+    pending_ = index;
+    const uint64_t ticket = ++queued_;
+    present_wake_.notify_all();
+    if (!wait) {
+        return !present_failed_;
     }
-    plane_on_ = true;
-    return true;
+    // Una foto: se espera a que esté en pantalla, para poder decir si ha fallado.
+    present_wake_.wait(lock, [&] { return presented_ >= ticket || present_quit_; });
+    return !present_failed_;
+}
+
+void KmsDisplay::present_loop() {
+    std::unique_lock<std::mutex> lock(present_mutex_);
+    for (;;) {
+        present_wake_.wait(lock, [&] { return present_quit_ || pending_ >= 0; });
+        if (present_quit_) {
+            return;
+        }
+        const int index = pending_;
+        const uint64_t ticket = queued_;
+        pending_ = -1;
+        in_flight_ = index;
+        const uint32_t fb = frames_[static_cast<size_t>(index)].fb;
+        const int width = frame_width_;
+        const int height = frame_height_;
+        lock.unlock();
+
+        // SETPLANE espera al siguiente refresco de la pantalla (medido: 8,5 ms de media, como
+        // mucho uno entero): así no se ve medio fotograma, y por eso va en este hilo y no en
+        // el del reproductor, que mientras tanto ya está copiando el siguiente.
+        const auto fit = gallery::fit_rect(width, height, width_, height_);
+        drm_mode_set_plane set{};
+        set.plane_id = plane_;
+        set.crtc_id = crtc_;
+        set.fb_id = fb;
+        set.crtc_x = fit.x;
+        set.crtc_y = fit.y;
+        set.crtc_w = static_cast<uint32_t>(fit.width);
+        set.crtc_h = static_cast<uint32_t>(fit.height);
+        // Origen en 16.16.
+        set.src_w = static_cast<uint32_t>(width) << 16;
+        set.src_h = static_cast<uint32_t>(height) << 16;
+        const bool ok = drm_ioctl(fd_, DRM_IOCTL_MODE_SETPLANE, &set) == 0;
+
+        lock.lock();
+        in_flight_ = -1;
+        if (ok) {
+            shown_ = index;
+            plane_on_ = true;
+        }
+        present_failed_ = !ok;
+        presented_ = std::max(presented_, ticket);
+        present_wake_.notify_all();
+    }
+}
+
+void KmsDisplay::wait_idle() {
+    std::unique_lock<std::mutex> lock(present_mutex_);
+    present_wake_.wait(lock, [&] { return present_quit_ || (pending_ < 0 && in_flight_ < 0); });
 }
 
 void KmsDisplay::blank() {
-    if (fd_ < 0 || !plane_on_) {
+    if (fd_ < 0) {
+        return;
+    }
+    wait_idle();
+    std::lock_guard<std::mutex> lock(present_mutex_);
+    if (!plane_on_) {
         return;
     }
     drm_mode_set_plane set{};
     set.plane_id = plane_;
     drm_ioctl(fd_, DRM_IOCTL_MODE_SETPLANE, &set);
     plane_on_ = false;
+    shown_ = -1;
 }
 
 void KmsDisplay::close() {
-    if (fd_ >= 0) {
+    if (presenter_.joinable()) {
         blank();
-        // Apagar la salida: la tele dice «sin señal» en vez de quedarse en negro.
+        {
+            std::lock_guard<std::mutex> lock(present_mutex_);
+            present_quit_ = true;
+        }
+        present_wake_.notify_all();
+        presenter_.join();
+    }
+    if (fd_ >= 0) {
+        // Apagar la salida. Al cerrar, la consola del sistema (fbdev) la vuelve a coger, en
+        // negro: eso es cosa del kernel, no de la app.
         if (crtc_) {
             drm_mode_crtc off{};
             off.crtc_id = crtc_;
@@ -407,8 +524,10 @@ void KmsDisplay::close() {
     crtc_ = connector_ = plane_ = 0;
     width_ = height_ = 0;
     frame_width_ = frame_height_ = 0;
-    next_ = 0;
     plane_on_ = false;
+    pending_ = in_flight_ = shown_ = -1;
+    queued_ = presented_ = 0;
+    present_failed_ = false;
 }
 
 #else // sin KMS (no es Linux): nunca hay HDMI
@@ -421,11 +540,14 @@ bool KmsDisplay::create_buffer(Buffer&, int, int, bool) {
     return false;
 }
 void KmsDisplay::destroy_buffer(Buffer&) {}
-bool KmsDisplay::show(const uint8_t*, int, int) {
+bool KmsDisplay::show(const uint8_t*, int, int, bool) {
     return false;
 }
 void KmsDisplay::blank() {}
 void KmsDisplay::close() {}
+void KmsDisplay::drop_background() {}
+void KmsDisplay::present_loop() {}
+void KmsDisplay::wait_idle() {}
 
 #endif
 

@@ -5,9 +5,12 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace platform {
 
@@ -15,11 +18,14 @@ namespace platform {
  * La salida HDMI del Cardputer Zero manejada directamente por DRM/KMS (la tarjeta `vc4`;
  * la pantalla interna es otra tarjeta, la del panel SPI, y no se toca).
  *
- * Al abrir, se pone el modo que elige hdmi::pick_mode con un fondo negro; cada fotograma
- * (YUV 4:2:0, como lo saca ffmpeg) va a un plano superpuesto que la GPU escala y centra
- * en la pantalla. Así un vídeo de 720p se ve a pantalla completa sin que la CPU amplíe
- * nada, y con `gpu_mem=16` también: el escalador de la GPU no depende de esa memoria (el
- * decodificador por hardware sí, y por eso aquí no se usa).
+ * Al abrir, se pone el modo que elige hdmi::pick_mode y se apaga el plano de fondo (la GPU
+ * rellena de negro sola); cada fotograma (YUV 4:2:0, como lo saca ffmpeg) va a un plano
+ * superpuesto que la GPU escala y centra en la pantalla. Tres búferes y un hilo que los
+ * cambia en cada refresco: sin medio fotograma a la vista y sin frenar al reproductor.
+ *
+ * Escalar es cosa de la GPU: un vídeo de 720p se ve a pantalla completa sin que la CPU amplíe
+ * nada, y un 1080p del decodificador por hardware se reduce sin leerlo con la CPU. El escalador
+ * no depende de `gpu_mem` (funciona también con 16).
  *
  * Sólo ioctls del kernel (cabeceras `drm/drm_mode.h` de linux-libc-dev), sin libdrm: no
  * añade dependencias al .deb. Mientras está abierta, la app es la dueña (DRM master) de
@@ -50,10 +56,11 @@ public:
 
     /**
      * Pinta un fotograma YUV 4:2:0 plano (I420: Y, luego U y V a medio tamaño) de
-     * `width`×`height` (pares), encajado con su proporción y centrado. Se escribe en el
-     * búfer que no se está viendo y luego se cambia: sin medio fotograma a la vista.
+     * `width`×`height` (pares), encajado con su proporción y centrado. Se copia a un búfer
+     * libre y se deja para el siguiente refresco; vuelve sin esperarlo, salvo con `wait`
+     * (una foto: así se sabe si ha salido). `false` si el último cambio falló.
      */
-    bool show(const uint8_t* frame, int width, int height);
+    bool show(const uint8_t* frame, int width, int height, bool wait = false);
 
     /** Quita la imagen (queda la pantalla en negro). */
     void blank();
@@ -70,6 +77,10 @@ private:
 
     bool create_buffer(Buffer& buffer, int width, int height, bool yuv);
     void destroy_buffer(Buffer& buffer);
+    void drop_background();
+    void present_loop();
+    /** Espera a que no quede ningún cambio pendiente ni en marcha. */
+    void wait_idle();
 
     int fd_{-1};
     uint32_t crtc_{0};
@@ -78,11 +89,22 @@ private:
     int width_{0};
     int height_{0};
     Buffer background_;
-    std::array<Buffer, 2> frames_;
+    std::array<Buffer, 3> frames_;
     int frame_width_{0};
     int frame_height_{0};
-    int next_{0};
     bool plane_on_{false};
+
+    // Cambio de fotograma en su hilo (todo con present_mutex_).
+    std::mutex present_mutex_;
+    std::condition_variable present_wake_;
+    std::thread presenter_;
+    bool present_quit_{false};
+    int pending_{-1};   // búfer listo esperando turno
+    int in_flight_{-1}; // búfer que se está poniendo (SETPLANE en marcha)
+    int shown_{-1};     // búfer en pantalla
+    uint64_t queued_{0};
+    uint64_t presented_{0};
+    bool present_failed_{false};
 };
 
 } // namespace platform

@@ -301,7 +301,7 @@ void HdmiPlayer::show_still(const Request& request) {
     if (superseded(request.generation)) {
         return;
     }
-    if (!display_->show(frame.data(), width, height)) {
+    if (!display_->show(frame.data(), width, height, true)) {
         fail(request.generation, "HDMI: cannot show the image");
         return;
     }
@@ -320,7 +320,7 @@ bool HdmiPlayer::show_video_frame(const Request& request, double seconds, int wi
     if (!read_frame(ffmpeg, frame, filled, [&] { return superseded(request.generation); })) {
         return false;
     }
-    return display_->show(frame.data(), width, height);
+    return display_->show(frame.data(), width, height, true);
 }
 
 void HdmiPlayer::play_video(const Request& request) {

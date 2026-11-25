@@ -159,10 +159,28 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
     (ni del decodificador, ver arriba, ni con `hwupload`).
   - `mpv` sería una dependencia de cientos de MB para lo mismo.
   - La app es la dueña (DRM master) de `card0` mientras manda al HDMI; con lightdm en marcha
-    `SETCRTC` da EACCES y se avisa. Al dejar de mandar se apaga la salida (la tele dice «sin señal»).
+    `SETCRTC` da EACCES y se avisa. Al dejar de mandar se apaga la salida, pero al cerrar la
+    tarjeta la vuelve a coger la consola del kernel (fbdev, `fb1`, que se crea al enchufar) y la
+    deja en negro: la tele no dice «sin señal». Es así sin la app también.
+  - **El plano de fondo se apaga tras poner el modo (0.6.2)**: con él (XR24 a pantalla
+    completa), a 1920×1200@60 la GPU **rechaza** una foto a pantalla completa encima
+    (`SETPLANE` → ENOSPC: lo cuenta `vc4_load_tracker`, `hvs_load_tracker` = Y); a 1920×1150
+    entraba justo. Apagado (con `DRM_CLIENT_CAP_UNIVERSAL_PLANES` y SETPLANE con fb 0 al
+    primario), la GPU rellena de negro sola y son ~550 MB/s menos de lectura de memoria.
+  - **Tres búferes y un hilo para SETPLANE (0.6.2)**: SETPLANE espera al refresco (8,5 ms de
+    media, hasta 16,7): sin medio fotograma a la vista, pero en el hilo del reproductor un
+    720p60 se quedaba en 45 fps. Ahora el reproductor copia y sigue; si llega un fotograma con
+    otro esperando, el que esperaba se tira. 720p60 por hardware a 60 fps; 0 underruns.
+  - Fotos a 1920×1200: 12 Mpx en ~2 s. `-lowres` de ffmpeg apenas ayuda (1,90 → 1,78 s: lo
+    que pesa es leer el JPEG comprimido), así que no se usa.
   - El sonido no va por HDMI (`snd_bcm2835.enable_hdmi=0` en `cpzero`): va por PipeWire, como siempre.
 - **Probar el HDMI sin cable**: `sudo sh -c 'echo on > /sys/class/drm/card0-HDMI-A-1/status'`
-  lo da por conectado (modos de serie, 1024×768) y `echo detect` lo devuelve. Lo que hay en
+  lo da por conectado (modos de serie, 1024×768) y `echo detect` lo devuelve. **Para simular
+  una pantalla concreta** (así se probó 1920×1200@60): se escribe un EDID de 128 bytes en
+  `/sys/kernel/debug/dri/0/HDMI-A-1/edid_override`, se pone `off` y `on` en `status` y se
+  sondea (`kmsprint -m`). **Al acabar, `printf reset >` ese fichero** (con `echo` da I/O error):
+  si no, una pantalla de verdad enchufada antes de reiniciar usaría el EDID falso. Los fallos
+  de la GPU al refrescar se cuentan en `/sys/kernel/debug/dri/0/hvs_underrun`. Lo que hay en
   cada plano se ve en `sudo cat /sys/kernel/debug/dri/0/state` (tamaño y formato del búfer) y
   quién es el dueño en `.../clients`; `kmsgrab` no captura planos YUV. Para probar sin interfaz
   se compila con `aarch64-linux-gnu-g++` un `main` que use `HdmiPlayer` con
@@ -196,6 +214,11 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.6.2 (25-nov-2026)**: HDMI a 1920×1200@60 de verdad. Probado con un EDID simulado de
+  1920×1200@59,95 (CVT-RB, 154 MHz): antes las fotos fallaban («cannot show the image»: la GPU
+  no daba para el fondo y la foto); ahora sin plano de fondo y con tres búferes y un hilo para
+  cambiarlos: foto de 12 Mpx (2,5 s) y pequeña, 1080p25 por hardware (93 % + 36 %), 720p60 por
+  hardware a 60 fps (antes 45), pausa y saltos, 0 underruns. Sin probar con una pantalla de verdad.
 - **0.6.1 (25-nov-2026)**: HDMI con el decodificador H.264 por hardware cuando está (gpu_mem
   ≥ 32; en `cpzero` ya 64) y hasta 1920×1200 (antes 1080p). Probado en `cpzero` con el conector
   forzado: 1080p25 y 720p por hardware a tiempo real con la mitad de CPU, pausa y saltos; el

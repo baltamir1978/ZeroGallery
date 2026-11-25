@@ -83,11 +83,14 @@ la tele sino el Cardputer, con `ffmpeg`, y lo pinta en esa salida sin escritorio
   CPU. Si no, por software, que también llega a 1080p a 30 fps pero gasta casi dos núcleos.
   Por software van también HEVC (el chip no lo decodifica), los vídeos de móvil grabados de pie
   (girarlos con hardware sería lentísimo) y los de más de 1080p.
-- Hasta 30 fps (60 en 720p con hardware). **Un 1080p a 60 fps no llega a velocidad real** (se
+- Hasta 30 fps (60 en 720p con hardware, comprobado). Sin tirones ni medio fotograma a la
+  vista: cada fotograma cambia en un refresco de la pantalla. **Un 1080p a 60 fps no llega a velocidad real** (se
   queda en un 90 %): pasar tantos fotogramas grandes de la GPU a la pantalla es más de lo que da
   el Cardputer.
 - El sonido sale por donde esté el del sistema (altavoz, auriculares o Bluetooth), no por el HDMI.
 - Con un escritorio en la salida HDMI (lightdm), la salida está ocupada y lo dice.
+- Al dejar de mandar, la pantalla se queda en negro (la consola del sistema vuelve a coger el
+  HDMI), no en «sin señal».
 - Mientras se manda al HDMI, la pantalla del Cardputer sigue enseñando la foto; con un vídeo,
   sólo cómo va (para no decodificarlo dos veces).
 
@@ -184,6 +187,10 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.6.2 (25-nov-2026)** — HDMI a 1920×1200 a 60 Hz con fotos a pantalla completa (antes
+fallaban a esa resolución) y vídeo de 720p a 60 fps. Probado simulando un monitor de
+1920×1200; sin probar con una pantalla de verdad.
 
 **0.6.1 (25-nov-2026)** — HDMI con el decodificador por hardware (H.264 hasta 1080p, con
 `gpu_mem` de 32 MB o más) y hasta 1920×1200. Probado con la salida forzada; sin probar con una
