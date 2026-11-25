@@ -33,6 +33,10 @@ void test_pick_mode() {
     CHECK(hdmi::pick_mode({{3840, 2160, 30, true}, {1920, 1080, 24}, {1920, 1080, 60}, {1920, 1080, 30}, {1280, 720, 60}}) == 2);
     // 1080i no.
     CHECK(hdmi::pick_mode({{3840, 2160, 60, true}, {1920, 1080, 60, false, true}, {1280, 720, 60}}) == 2);
+    // Monitor de 1920×1200: el suyo, que la CM0 lo saca.
+    CHECK(hdmi::pick_mode({{1920, 1200, 60, true}, {1920, 1080, 60}}) == 0);
+    // 2560×1440 preferido: no; 1920×1200 antes que 1920×1080.
+    CHECK(hdmi::pick_mode({{2560, 1440, 60, true}, {1920, 1080, 60}, {1920, 1200, 60}}) == 2);
     // Sin EDID (conector forzado): los de serie, ninguno preferido; el mayor.
     CHECK(hdmi::pick_mode({{1024, 768, 60}, {800, 600, 60}, {640, 480, 60}}) == 0);
     CHECK(hdmi::pick_mode({}) == -1);
@@ -85,12 +89,46 @@ void test_parse_probe() {
     CHECK(near(info.fps, 30.0));
 
     // Lo que no se sabe se queda en 0.
+    info = hdmi::parse_probe("codec_name=h264\nwidth=1920\nheight=1080\n");
+    CHECK(info.codec == "h264");
+    CHECK(hdmi::hardware_decodable(info));
+
     info = hdmi::parse_probe("duration=N/A\n");
     CHECK(info.width == 0 && info.fps == 0.0 && info.duration == 0.0);
 
     CHECK(near(hdmi::parse_rate("30000/1001"), 29.97));
     CHECK(hdmi::parse_rate("0/0") == 0.0);
     CHECK(near(hdmi::parse_rate("24"), 24.0));
+}
+
+void test_hardware() {
+    hdmi::VideoInfo info;
+    info.codec = "h264";
+    info.width = 1080;
+    info.height = 1920; // grabado de pie sin giro en los metadatos: vale
+    CHECK(hdmi::hardware_decodable(info));
+    info.rotation = -90; // de pie con giro: girar con la CPU sería lentísimo
+    CHECK(!hdmi::hardware_decodable(info));
+    info.rotation = 180;
+    CHECK(!hdmi::hardware_decodable(info));
+    info.rotation = 0;
+    info.width = 853;
+    info.height = 481;
+    CHECK(hdmi::hardware_size(info).width == 852 && hdmi::hardware_size(info).height == 480);
+    info.width = 3840;
+    info.height = 2160;
+    CHECK(!hdmi::hardware_decodable(info));
+    info.codec = "hevc";
+    info.width = 1920;
+    info.height = 1080;
+    CHECK(!hdmi::hardware_decodable(info));
+    info.codec = "h264";
+    info.width = 0;
+    CHECK(!hdmi::hardware_decodable(info));
+
+    CHECK(hdmi::max_fps(true, 1280, 720) == 60.0);
+    CHECK(hdmi::max_fps(true, 1920, 1080) == 30.0);
+    CHECK(hdmi::max_fps(false, 1280, 720) == 30.0);
 }
 
 void test_status() {
@@ -106,6 +144,7 @@ int main() {
     test_pick_mode();
     test_video_size();
     test_parse_probe();
+    test_hardware();
     test_status();
     if (failures) {
         std::printf("%d fallos\n", failures);

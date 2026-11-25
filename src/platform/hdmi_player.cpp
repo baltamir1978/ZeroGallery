@@ -20,8 +20,6 @@
 namespace platform {
 namespace {
 
-// Más de 30 fps a 1080p no los decodifica la CM0 por software: se tiran fotogramas.
-constexpr double kMaxFps = 30.0;
 // Por encima de 720p se salta el filtro antibloques de H.264 (como en la pantalla del
 // aparato): a 1080p es lo que deja margen para ir a velocidad real.
 constexpr long long kSkipLoopFilterPixels = 1280LL * 720;
@@ -73,9 +71,31 @@ std::vector<std::string> still_arguments(const std::string& path, int orientatio
     return arguments;
 }
 
+/**
+ * Si está el decodificador H.264 por hardware (`bcm2835-codec-decode`, que sólo aparece con
+ * `gpu_mem` de 32 MB o más). Se mira una vez: cambiar gpu_mem pide reiniciar.
+ * `ZEROGALLERY_HWDEC=0` lo desactiva.
+ */
+bool hardware_decoder_available() {
+    static const bool available = [] {
+        if (std::string(env_or("ZEROGALLERY_HWDEC", "1")) == "0") {
+            return false;
+        }
+        for (int i = 0; i < 64; ++i) {
+            std::ifstream name("/sys/class/video4linux/video" + std::to_string(i) + "/name");
+            std::string text;
+            if (std::getline(name, text) && text.find("codec-decode") != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    return available;
+}
+
 std::string video_filter(int width, int height, double fps, double source_fps) {
     std::string filter;
-    if (source_fps > kMaxFps + 0.5) {
+    if (fps > 0.0 && source_fps > fps + 0.5) {
         filter = "fps=" + std::to_string(static_cast<int>(fps)) + ",";
     }
     return filter + "scale=" + size_text(width, height) + ":flags=bilinear,format=yuv420p";
@@ -309,15 +329,29 @@ void HdmiPlayer::play_video(const Request& request) {
 
     const auto info = hdmi::parse_probe(probe_text(
         {"-v", "error", "-select_streams", "v:0", "-show_entries",
-         "stream=width,height,r_frame_rate,avg_frame_rate:stream_side_data=rotation:format=duration", "-of",
+         "stream=codec_name,width,height,r_frame_rate,avg_frame_rate:stream_side_data=rotation:format=duration", "-of",
          "default=nw=1", request.path}));
-    const auto size = hdmi::video_size(info.width, info.height, display_->width(), display_->height());
-    const double fps = info.fps > 0.0 ? std::min(info.fps, kMaxFps) : 25.0;
+    // Con el decodificador por hardware la CPU sólo mueve los fotogramas (75 % de un núcleo
+    // con un 1080p30, frente a casi dos por software). Si falla con un vídeo, se sigue por
+    // software.
+    bool hardware = hardware_decoder_available() && hdmi::hardware_decodable(info);
+    const auto fps_for = [&](bool with_hardware) {
+        const double limit = hdmi::max_fps(with_hardware, info.width, info.height);
+        return info.fps > 0.0 ? std::min(info.fps, limit) : 25.0;
+    };
+    // Con hardware, a su tamaño (reducir con la CPU sería lentísimo: lo hace la GPU); por
+    // software, reducido para que quepa, que cuesta menos que pasar el fotograma entero.
+    const auto size_for = [&](bool with_hardware) {
+        return with_hardware ? hdmi::hardware_size(info)
+                             : hdmi::video_size(info.width, info.height, display_->width(), display_->height());
+    };
+    double fps = fps_for(hardware);
+    hdmi::Size size = size_for(hardware);
     const bool skip_loop_filter = static_cast<long long>(info.width) * info.height > kSkipLoopFilterPixels;
     if (!loop) {
         duration_ = info.duration;
     }
-    const size_t frame_bytes = static_cast<size_t>(size.width) * size.height * 3 / 2;
+    size_t frame_bytes = static_cast<size_t>(size.width) * size.height * 3 / 2;
     std::vector<uint8_t> frame(frame_bytes);
 
     uint64_t toggles_seen = 0;
@@ -337,7 +371,10 @@ void HdmiPlayer::play_video(const Request& request) {
     double position = 0.0;
     for (;;) {
         std::vector<std::string> arguments = {"-nostdin", "-hide_banner", "-loglevel", "error"};
-        if (skip_loop_filter) {
+        if (hardware) {
+            arguments.insert(arguments.end(), {"-c:v", "h264_v4l2m2m"});
+        }
+        else if (skip_loop_filter) {
             arguments.insert(arguments.end(), {"-skip_loop_filter", "all"});
         }
         arguments.push_back("-re");
@@ -416,6 +453,15 @@ void HdmiPlayer::play_video(const Request& request) {
             if (exit_code == kExitExecFailed) {
                 fail(request.generation, "ffmpeg is not installed");
                 return;
+            }
+            if (exit_code != 0 && frames == 0 && hardware) {
+                // El decodificador por hardware no ha podido con este vídeo: por software.
+                hardware = false;
+                fps = fps_for(false);
+                size = size_for(false);
+                frame_bytes = static_cast<size_t>(size.width) * size.height * 3 / 2;
+                frame.assign(frame_bytes, 0);
+                continue;
             }
             if (exit_code != 0 && !audio.empty()) {
                 // Sin pista de sonido, o la salida de sonido no se deja abrir: sólo imagen.

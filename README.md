@@ -75,11 +75,17 @@ Con una pantalla o una tele enchufada al HDMI del Cardputer, la lista de `V` emp
 **HDMI**, y se maneja igual que una tele: pasar de foto, saltar y pausar. Aquí no decodifica
 la tele sino el Cardputer, con `ffmpeg`, y lo pinta en esa salida sin escritorio de por medio:
 
-- Se pone el modo que prefiere la pantalla (si es 4K, el mayor hasta 1080p). Las fotos se
-  encajan a ese tamaño; los vídeos llegan a su tamaño y la GPU los amplía a pantalla completa.
-- Un H.264 de 1080p va a velocidad real por software (lo decodifica a 1,6 veces la velocidad real),
-  así que no hace falta el decodificador por hardware ni subir `gpu_mem` (ZeroPower lo deja en 16).
-  Los vídeos de más de 30 fps se ven a 30.
+- Se pone el modo que prefiere la pantalla, hasta **1920×1200 a 60 Hz**, que es lo más que saca
+  el HDMI del Cardputer (con una 4K, el mayor hasta ahí). Las fotos se encajan a ese tamaño; los
+  vídeos llegan a su tamaño y la GPU los amplía (o reduce) a pantalla completa.
+- Los **H.264 hasta 1080p** usan el **decodificador por hardware** si la memoria de la GPU es de
+  32 MB o más (en ZeroPower, *GPU memory*; con 16 no existe): a velocidad real con la mitad de
+  CPU. Si no, por software, que también llega a 1080p a 30 fps pero gasta casi dos núcleos.
+  Por software van también HEVC (el chip no lo decodifica), los vídeos de móvil grabados de pie
+  (girarlos con hardware sería lentísimo) y los de más de 1080p.
+- Hasta 30 fps (60 en 720p con hardware). **Un 1080p a 60 fps no llega a velocidad real** (se
+  queda en un 90 %): pasar tantos fotogramas grandes de la GPU a la pantalla es más de lo que da
+  el Cardputer.
 - El sonido sale por donde esté el del sistema (altavoz, auriculares o Bluetooth), no por el HDMI.
 - Con un escritorio en la salida HDMI (lightdm), la salida está ocupada y lo dice.
 - Mientras se manda al HDMI, la pantalla del Cardputer sigue enseñando la foto; con un vídeo,
@@ -178,6 +184,10 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.6.1 (25-nov-2026)** — HDMI con el decodificador por hardware (H.264 hasta 1080p, con
+`gpu_mem` de 32 MB o más) y hasta 1920×1200. Probado con la salida forzada; sin probar con una
+pantalla de verdad.
 
 **0.6.0 (25-nov-2026)** — por HDMI: la lista de `V` empieza por «HDMI» con una pantalla
 enchufada. Probado en el Cardputer con la salida forzada a «conectada» y sin cable (fotos,

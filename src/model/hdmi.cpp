@@ -12,7 +12,7 @@ namespace hdmi {
 namespace {
 
 constexpr int kMaxWidth = 1920;
-constexpr int kMaxHeight = 1080;
+constexpr int kMaxHeight = 1200;
 
 bool fits(const Mode& mode) {
     return mode.width > 0 && mode.height > 0 && mode.width <= kMaxWidth && mode.height <= kMaxHeight &&
@@ -114,7 +114,10 @@ VideoInfo parse_probe(std::string_view text) {
         const std::string value(line.substr(equal + 1));
         // ffprobe da el primer valor del flujo y, si se le pide, también el del formato:
         // se queda el primero que tenga sentido.
-        if (key == "width" && info.width == 0) {
+        if (key == "codec_name" && info.codec.empty()) {
+            info.codec = value;
+        }
+        else if (key == "width" && info.width == 0) {
             info.width = std::atoi(value.c_str());
         }
         else if (key == "height" && info.height == 0) {
@@ -143,6 +146,21 @@ VideoInfo parse_probe(std::string_view text) {
         std::swap(info.width, info.height);
     }
     return info;
+}
+
+bool hardware_decodable(const VideoInfo& info) {
+    const int longest = std::max(info.width, info.height);
+    const int shortest = std::min(info.width, info.height);
+    const int quarter = ((info.rotation % 360) + 360) % 360;
+    return info.codec == "h264" && quarter == 0 && shortest > 0 && longest <= 1920 && shortest <= 1088;
+}
+
+Size hardware_size(const VideoInfo& info) {
+    return {even_down(info.width), even_down(info.height)};
+}
+
+double max_fps(bool hardware, int width, int height) {
+    return hardware && static_cast<long long>(width) * height <= 1280LL * 720 ? 60.0 : 30.0;
 }
 
 bool status_connected(std::string_view text) {

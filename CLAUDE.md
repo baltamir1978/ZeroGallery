@@ -128,17 +128,35 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 - **HDMI (0.6.0) sin libdrm ni mpv**: `platform/kms_display.*` usa los ioctls del kernel
   (`drm/drm_mode.h`): abre la tarjeta que tenga un HDMI `connected` en /sys (`card0`, `vc4`; la
   pantalla interna es `card1`, el panel SPI, y no se toca), pone el modo con un fondo XR24 negro
-  y cada fotograma va a un **plano superpuesto YU12** que la GPU escala y centra. `ffmpeg`
+  y cada fotograma va a un **plano superpuesto YU12** que la GPU escala y centra. El modo:
+  el preferido de la pantalla hasta 1920×1200 (lo más que saca el HDMI de la CM0). `ffmpeg`
   entrega I420 por la tubería (`platform/hdmi_player.*`): las fotos al tamaño de la pantalla,
   los vídeos al suyo si cabe (`hdmi::video_size`). Por qué así y no otra cosa (probado el
   25-nov-2026 en `cpzero`):
-  - Con `gpu_mem=16` el firmware es `start_cd` y **no hay decodificador por hardware**
-    (`h264_v4l2m2m` no tiene dispositivo). No hace falta: un H.264 1080p se decodifica a 1,6×
-    (2× sin el filtro antibloques, que se salta por encima de 720p) y la copia al búfer DRM tarda
-    menos de 27 ms el peor fotograma. 186 % de CPU con un 1080p reducido a 1024×576; 8 % un 320×240.
+  - **Decodificador H.264 por hardware (0.6.1)**: con `gpu_mem` ≥ 32 está `h264_v4l2m2m`
+    (`/sys/class/video4linux/video*/name` = `bcm2835-codec-decode`); con 16 el firmware es
+    `start_cd` y no existe. `cpzero` va con 64 desde el 25-nov-2026 (puesto por ZeroPower a
+    petición de Bruno). Se usa si el vídeo es H.264, hasta 1920×1080 y **sin giro** en los
+    metadatos (`hdmi::hardware_decodable`); si ffmpeg falla sin sacar ningún fotograma, se
+    repite por software. `ZEROGALLERY_HWDEC=0` lo desactiva.
+  - **El decodificador deja los fotogramas en memoria sin caché**: leerlos con la CPU es
+    lentísimo. Reducir un 1080p a 1024×576 con `scale` iba a 0,4× (24 s para 10 s); girarlo,
+    igual. Por eso con hardware el fotograma va **a su tamaño** (`hdmi::hardware_size`) y lo
+    reduce el plano de la GPU, y los vídeos de móvil grabados de pie van por software. Medido:
+    1080p25 a tiempo real con ffmpeg al 100 % de un núcleo y la app al 29 % (antes, por software,
+    186 %); 720p, 54 % + 31 %.
+  - **1080p a 60 fps no llega a tiempo real** de ninguna forma: copiar 60 fotogramas de 3 MB
+    por segundo de esa memoria es el límite (0,9× con hardware aunque se pidan 30, porque `fps`
+    tira los sobrantes después de copiarlos; 0,8× por software). El tope es 60 fps hasta 720p
+    con hardware y 30 en lo demás (`hdmi::max_fps`). La única salida sería no copiar (DRM PRIME),
+    y este ffmpeg no lo da con el decodificador de la Pi 3: `-pixel_format drm_prime` →
+    «v4l2 capture format not supported»; `hwdownload`/`hwmap` tampoco negocian.
+  - Por software: un H.264 1080p se decodifica a 1,6× (2× sin el filtro antibloques, que se
+    salta por encima de 720p) y se reduce a la pantalla antes de pasarlo (cuesta menos que pasar
+    el fotograma entero). La copia al búfer DRM tarda menos de 27 ms el peor fotograma.
   - La salida `vout_drm` del ffmpeg de Raspberry Pi **no sirve**: sólo pinta en una CRTC ya
-    encendida por otro y sólo acepta fotogramas DRM PRIME (los da el decodificador por hardware;
-    `hwupload` a DRM no existe).
+    encendida por otro y sólo acepta fotogramas DRM PRIME, que aquí no salen de ningún sitio
+    (ni del decodificador, ver arriba, ni con `hwupload`).
   - `mpv` sería una dependencia de cientos de MB para lo mismo.
   - La app es la dueña (DRM master) de `card0` mientras manda al HDMI; con lightdm en marcha
     `SETCRTC` da EACCES y se avisa. Al dejar de mandar se apaga la salida (la tele dice «sin señal»).
@@ -178,6 +196,10 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.6.1 (25-nov-2026)**: HDMI con el decodificador H.264 por hardware cuando está (gpu_mem
+  ≥ 32; en `cpzero` ya 64) y hasta 1920×1200 (antes 1080p). Probado en `cpzero` con el conector
+  forzado: 1080p25 y 720p por hardware a tiempo real con la mitad de CPU, pausa y saltos; el
+  1080p60 de prueba a 0,9× (límite conocido). Sin probar con una pantalla de verdad.
 - **0.6.0 (25-nov-2026)**: por HDMI (ver «Decisiones»). `V` lista «HDMI» primero si hay algo
   enchufado. Probado en `cpzero` con el conector forzado y sin cable: el reproductor (foto JPEG y
   PNG, vídeo 1080p y 320×240, pausa, saltos parado y en marcha, final y volver a empezar, GIF)
