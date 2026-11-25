@@ -163,6 +163,19 @@ double max_fps(bool hardware, int width, int height) {
     return hardware && static_cast<long long>(width) * height <= 1280LL * 720 ? 60.0 : 30.0;
 }
 
+int parse_gpu_mem(std::string_view text) {
+    text = trim(text);
+    const auto equal = text.find('=');
+    if (equal == std::string_view::npos || text.substr(0, equal) != "gpu") {
+        return -1;
+    }
+    const std::string value(text.substr(equal + 1));
+    if (value.empty() || value[0] < '0' || value[0] > '9') {
+        return -1;
+    }
+    return std::atoi(value.c_str());
+}
+
 bool status_connected(std::string_view text) {
     return trim(text) == "connected";
 }

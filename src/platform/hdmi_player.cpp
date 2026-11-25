@@ -71,9 +71,34 @@ std::vector<std::string> still_arguments(const std::string& path, int orientatio
     return arguments;
 }
 
+// Sin el primer fotograma en este tiempo, el decodificador por hardware se da por colgado
+// (con poca memoria de GPU tardaba 28 s en fallar) y se sigue por software.
+constexpr auto kHardwareFirstFrame = std::chrono::seconds(6);
+
+/** Memoria de la GPU en MB según `vcgencmd`; -1 si no se puede preguntar. */
+int gpu_memory_mb() {
+    FfmpegProcess vcgencmd;
+    if (!vcgencmd.start({"get_mem", "gpu"}, "vcgencmd")) {
+        return -1;
+    }
+    char text[64] = {};
+    size_t filled = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (filled < sizeof(text) - 1 && std::chrono::steady_clock::now() < deadline) {
+        const long count = vcgencmd.read_some(reinterpret_cast<uint8_t*>(text) + filled, sizeof(text) - 1 - filled, 100);
+        if (count < 0) {
+            break;
+        }
+        filled += static_cast<size_t>(count);
+    }
+    return hdmi::parse_gpu_mem(text);
+}
+
 /**
- * Si está el decodificador H.264 por hardware (`bcm2835-codec-decode`, que sólo aparece con
- * `gpu_mem` de 32 MB o más). Se mira una vez: cambiar gpu_mem pide reiniciar.
+ * Si está el decodificador H.264 por hardware: el dispositivo (`bcm2835-codec-decode`) y
+ * memoria de GPU para él. Con 32 MB el dispositivo aparece pero no funciona, así que también
+ * se pregunta la memoria (si no se puede, vale con el dispositivo: el tiempo máximo del primer
+ * fotograma lo cubre). Se mira una vez: cambiar gpu_mem pide reiniciar.
  * `ZEROGALLERY_HWDEC=0` lo desactiva.
  */
 bool hardware_decoder_available() {
@@ -81,14 +106,17 @@ bool hardware_decoder_available() {
         if (std::string(env_or("ZEROGALLERY_HWDEC", "1")) == "0") {
             return false;
         }
-        for (int i = 0; i < 64; ++i) {
+        bool device = false;
+        for (int i = 0; i < 64 && !device; ++i) {
             std::ifstream name("/sys/class/video4linux/video" + std::to_string(i) + "/name");
             std::string text;
-            if (std::getline(name, text) && text.find("codec-decode") != std::string::npos) {
-                return true;
-            }
+            device = std::getline(name, text) && text.find("codec-decode") != std::string::npos;
         }
-        return false;
+        if (!device) {
+            return false;
+        }
+        const int memory = gpu_memory_mb();
+        return memory < 0 || memory >= hdmi::kHardwareDecoderGpuMem;
     }();
     return available;
 }
@@ -401,10 +429,16 @@ void HdmiPlayer::play_video(const Request& request) {
         size_t filled = 0;
         long frames = 0;
         bool paused = false;
+        bool stalled = false;
         double sought = 0.0;
+        const auto started = std::chrono::steady_clock::now();
         for (;;) {
             if (superseded(request.generation)) {
                 return;
+            }
+            if (hardware && frames == 0 && std::chrono::steady_clock::now() - started > kHardwareFirstFrame) {
+                stalled = true;
+                break;
             }
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -436,6 +470,16 @@ void HdmiPlayer::play_video(const Request& request) {
             }
         }
 
+        if (stalled) {
+            // El decodificador por hardware no da nada: por software desde donde iba.
+            ffmpeg.stop();
+            hardware = false;
+            fps = fps_for(false);
+            size = size_for(false);
+            frame_bytes = static_cast<size_t>(size.width) * size.height * 3 / 2;
+            frame.assign(frame_bytes, 0);
+            continue;
+        }
         position = loop ? 0.0 : position + static_cast<double>(frames) / fps;
         if (sought != 0.0) {
             position = landing(position, sought);

@@ -65,7 +65,7 @@ VideoInfo parse_probe(std::string_view text);
 
 /**
  * Si el vídeo se puede decodificar con el decodificador por hardware de la CM0
- * (`h264_v4l2m2m`, que sólo existe con `gpu_mem` de 32 MB o más): sólo H.264 y hasta
+ * (`h264_v4l2m2m`, que sólo funciona con `gpu_mem` de 64 MB o más): sólo H.264 y hasta
  * 1920×1080, y **sin girar**. HEVC no lo decodifica: ese chip no lo tiene.
  *
  * Lo de girar es porque el decodificador deja los fotogramas en memoria sin caché: leerlos con
@@ -85,6 +85,16 @@ double max_fps(bool hardware, int width, int height);
 
 /** Tamaño de los fotogramas con el decodificador por hardware: el del vídeo, par. */
 Size hardware_size(const VideoInfo& info);
+
+/**
+ * Memoria de la GPU en MB de lo que dice `vcgencmd get_mem gpu` («gpu=64M»); -1 si no se
+ * entiende. El decodificador por hardware necesita 64: con 32 el dispositivo aparece pero el
+ * firmware no puede crearlo («Not enough GPU mem?»; probado el 25-nov-2026).
+ */
+int parse_gpu_mem(std::string_view text);
+
+/** MB de memoria de la GPU desde los que se usa el decodificador por hardware. */
+constexpr int kHardwareDecoderGpuMem = 64;
 
 /** Fotogramas por segundo de un «30000/1001» o «25/1»; 0 si no se entiende. */
 double parse_rate(std::string_view text);

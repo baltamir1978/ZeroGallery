@@ -133,9 +133,14 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   entrega I420 por la tubería (`platform/hdmi_player.*`): las fotos al tamaño de la pantalla,
   los vídeos al suyo si cabe (`hdmi::video_size`). Por qué así y no otra cosa (probado el
   25-nov-2026 en `cpzero`):
-  - **Decodificador H.264 por hardware (0.6.1)**: con `gpu_mem` ≥ 32 está `h264_v4l2m2m`
-    (`/sys/class/video4linux/video*/name` = `bcm2835-codec-decode`); con 16 el firmware es
-    `start_cd` y no existe. `cpzero` va con 64 desde el 25-nov-2026 (puesto por ZeroPower a
+  - **Decodificador H.264 por hardware (0.6.1)**: `h264_v4l2m2m`
+    (`/sys/class/video4linux/video*/name` = `bcm2835-codec-decode`). **Hace falta `gpu_mem` de
+    64**: con 16 el firmware es `start_cd` y no existe; **con 32 el dispositivo aparece pero no
+    funciona** (dmesg: «failed to create component -62 (Not enough GPU mem?)»; un 1080p se colgó
+    28 s antes de fallar; probado el 25-nov-2026). Por eso (0.6.3) se pregunta también
+    `vcgencmd get_mem gpu` (≥ 64, `hdmi::kHardwareDecoderGpuMem`) y, si el decodificador no da
+    el primer fotograma en 6 s, se sigue por software (probado con un `ZEROGALLERY_FFMPEG` que se
+    cuelga al pedir el hardware: a los 6 s, por software). `cpzero` va con 64 desde el 25-nov-2026 (puesto por ZeroPower a
     petición de Bruno). Se usa si el vídeo es H.264, hasta 1920×1080 y **sin giro** en los
     metadatos (`hdmi::hardware_decodable`); si ffmpeg falla sin sacar ningún fotograma, se
     repite por software. `ZEROGALLERY_HWDEC=0` lo desactiva.
@@ -214,6 +219,10 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.6.3 (25-nov-2026)**: el decodificador por hardware sólo con `gpu_mem` ≥ 64 (con 32 aparece
+  pero no funciona) y, si no da el primer fotograma en 6 s, por software. Probado en `cpzero`
+  con 32 (falla, ver «Decisiones») y de vuelta a 64 (desde ZeroPower): hardware normal, y con
+  el decodificador colgado a propósito pasa a software a los 6 s.
 - **0.6.2 (25-nov-2026)**: HDMI a 1920×1200@60 de verdad. Probado con un EDID simulado de
   1920×1200@59,95 (CVT-RB, 154 MHz): antes las fotos fallaban («cannot show the image»: la GPU
   no daba para el fondo y la foto); ahora sin plano de fondo y con tres búferes y un hilo para

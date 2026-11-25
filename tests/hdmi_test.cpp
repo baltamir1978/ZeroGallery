@@ -131,6 +131,14 @@ void test_hardware() {
     CHECK(hdmi::max_fps(false, 1280, 720) == 30.0);
 }
 
+void test_gpu_mem() {
+    CHECK(hdmi::parse_gpu_mem("gpu=64M\n") == 64);
+    CHECK(hdmi::parse_gpu_mem("gpu=32M") == 32);
+    CHECK(hdmi::parse_gpu_mem("gpu=16M\n") < hdmi::kHardwareDecoderGpuMem);
+    CHECK(hdmi::parse_gpu_mem("") == -1);
+    CHECK(hdmi::parse_gpu_mem("VCHI initialization failed") == -1);
+}
+
 void test_status() {
     CHECK(hdmi::status_connected("connected\n"));
     CHECK(!hdmi::status_connected("disconnected\n"));
@@ -145,6 +153,7 @@ int main() {
     test_video_size();
     test_parse_probe();
     test_hardware();
+    test_gpu_mem();
     test_status();
     if (failures) {
         std::printf("%d fallos\n", failures);

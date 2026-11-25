@@ -79,7 +79,7 @@ la tele sino el Cardputer, con `ffmpeg`, y lo pinta en esa salida sin escritorio
   el HDMI del Cardputer (con una 4K, el mayor hasta ahí). Las fotos se encajan a ese tamaño; los
   vídeos llegan a su tamaño y la GPU los amplía (o reduce) a pantalla completa.
 - Los **H.264 hasta 1080p** usan el **decodificador por hardware** si la memoria de la GPU es de
-  32 MB o más (en ZeroPower, *GPU memory*; con 16 no existe): a velocidad real con la mitad de
+  **64 MB** o más (en ZeroPower, *GPU memory*; con 16 no existe y con 32 no le basta): a velocidad real con la mitad de
   CPU. Si no, por software, que también llega a 1080p a 30 fps pero gasta casi dos núcleos.
   Por software van también HEVC (el chip no lo decodifica), los vídeos de móvil grabados de pie
   (girarlos con hardware sería lentísimo) y los de más de 1080p.
@@ -187,6 +187,9 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.6.3 (25-nov-2026)** — el decodificador por hardware sólo con 64 MB de GPU o más (con 32 no
+funciona) y, si se cuelga, el vídeo sigue por software a los 6 s.
 
 **0.6.2 (25-nov-2026)** — HDMI a 1920×1200 a 60 Hz con fotos a pantalla completa (antes
 fallaban a esa resolución) y vídeo de 720p a 60 fps. Probado simulando un monitor de
