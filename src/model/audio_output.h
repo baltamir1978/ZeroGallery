@@ -40,4 +40,19 @@ Output device_default(bool headphones);
  */
 bool eld_accepts_audio(std::string_view eld);
 
+/** Cuánto sube o baja el volumen cada pulsación de las teclas de volumen. */
+constexpr int kVolumeStep = 5;
+
+/**
+ * El volumen en % de lo que escribe `pactl get-sink-volume` («Volume: front-left: 19660 /  30%
+ * / -31.37 dB, …»): el del primer canal. -1 si no lo trae.
+ */
+int volume_from_pactl(std::string_view text);
+
+/** El volumen tras una pulsación: `current` + `delta`, sin pasar de 0 ni de 100. */
+int stepped_volume(int current, int delta);
+
+/** Si `pactl get-sink-mute` dice que está en silencio («Mute: yes»). */
+bool muted_from_pactl(std::string_view text);
+
 } // namespace audio

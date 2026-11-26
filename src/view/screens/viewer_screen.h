@@ -51,6 +51,11 @@ private:
     static void seek_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void cast_observer(lv_observer_t* observer, lv_subject_t* subject);
     static void audio_observer(lv_observer_t* observer, lv_subject_t* subject);
+    static void volume_observer(lv_observer_t* observer, lv_subject_t* subject);
+    /** El rótulo de arriba durante kCaptionMs (lo que suena, el volumen). */
+    void show_caption(const std::string& text);
+    void build_volume_bar(lv_obj_t* content, const lv_font_t* text_font);
+    void show_volume(int percent, bool muted);
     static void poll_timer_cb(lv_timer_t* timer);
 
     std::unique_ptr<platform::MediaPlayer> player_;
@@ -61,6 +66,12 @@ private:
     lv_obj_t* image_{nullptr};
     lv_obj_t* caption_{nullptr};
     lv_obj_t* status_box_{nullptr};
+    // Barra de volumen (Fn+S, Fn+D, Fn+A): un segundo en el centro.
+    lv_obj_t* volume_box_{nullptr};
+    lv_obj_t* volume_icon_{nullptr};
+    lv_obj_t* volume_bar_{nullptr};
+    lv_obj_t* volume_label_{nullptr};
+    uint32_t volume_since_{0};
     lv_obj_t* status_icon_{nullptr};
     lv_obj_t* status_text_{nullptr};
     lv_timer_t* poll_timer_{nullptr};
@@ -70,6 +81,7 @@ private:
     int32_t playback_seen_{0};
     int32_t seek_seen_{0};
     int32_t audio_seen_{0};
+    int32_t volume_seen_{0};
     // Tras un salto, el rótulo enseña un momento por dónde va el vídeo.
     bool seek_caption_{false};
     long seek_caption_second_{-1};

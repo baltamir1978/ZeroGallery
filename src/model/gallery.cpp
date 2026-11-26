@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <system_error>
 
 namespace gallery {
@@ -133,6 +134,12 @@ Action action_for_key(uint32_t key) {
         case 'a':
         case 'A':
             return Action::Audio;
+        case kKeyVolumeUp:
+            return Action::VolumeUp;
+        case kKeyVolumeDown:
+            return Action::VolumeDown;
+        case kKeyMute:
+            return Action::Mute;
         default:
             return Action::None;
     }
@@ -402,6 +409,28 @@ int seek_seconds_for(Action action) {
 
 bool rotation_swaps_axes(int turns) {
     return (turns & 1) != 0;
+}
+
+double screen_video_fps(double source_fps) {
+    if (!(source_fps >= 1.0) || source_fps > 1000.0) {
+        return kMaxScreenFps;
+    }
+    if (source_fps <= kMaxScreenFps + 0.01) {
+        return source_fps;
+    }
+    // El divisor entero más pequeño que lo deja dentro (el margen, para que 59,94 → 29,97).
+    const double divisor = std::ceil(source_fps / kMaxScreenFps - 0.001);
+    return source_fps / divisor;
+}
+
+double parse_frame_rate(const std::string& text) {
+    const auto slash = text.find('/');
+    const double numerator = std::atof(text.substr(0, slash).c_str());
+    const double denominator = slash == std::string::npos ? 1.0 : std::atof(text.substr(slash + 1).c_str());
+    if (!(numerator > 0.0) || !(denominator > 0.0)) {
+        return 0.0;
+    }
+    return numerator / denominator;
 }
 
 void rotate_to_screen(const uint16_t* upright, int turns, int screen_width, int screen_height, uint16_t* screen) {

@@ -4,6 +4,7 @@
 
 #include "audio_output.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace audio {
@@ -89,6 +90,29 @@ Output device_default(bool headphones) {
 bool eld_accepts_audio(std::string_view eld) {
     const std::string count(eld_value(eld, "sad_count"));
     return !count.empty() && std::atoi(count.c_str()) >= 1;
+}
+
+int volume_from_pactl(std::string_view text) {
+    const auto percent = text.find('%');
+    if (percent == std::string_view::npos) {
+        return -1;
+    }
+    std::size_t start = percent;
+    while (start > 0 && text[start - 1] >= '0' && text[start - 1] <= '9') {
+        --start;
+    }
+    if (start == percent) {
+        return -1;
+    }
+    return std::atoi(std::string(text.substr(start, percent - start)).c_str());
+}
+
+int stepped_volume(int current, int delta) {
+    return std::clamp(current + delta, 0, 100);
+}
+
+bool muted_from_pactl(std::string_view text) {
+    return text.find("Mute: yes") != std::string_view::npos;
 }
 
 } // namespace audio

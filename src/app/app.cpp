@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "fps_counters.h"
 #include "app.h"
 
 #include "application_config.h"
@@ -24,6 +25,8 @@
 #include <memory>
 #include <string>
 
+#include <cstring>
+#include <fcntl.h>
 #include <unistd.h>
 
 #if USE_DESKTOP
@@ -280,11 +283,46 @@ lv_display_t* init_device_display() {
         return nullptr;
     }
 
+    // El framebuffer del panel SPI (panel-mipi-dbi) es de «E/S diferida»: lo que se escribe
+    // por mmap el kernel lo manda al panel cuando le parece, y con el vídeo eso eran unas 6
+    // pantallas por segundo aunque llegasen 25 (tirones; medido con ftrace el 26-nov-2026).
+    // Un fsync al acabar cada fotograma lo manda ya: 30 por segundo sin problema.
+    static int sync_fd = open(APP_FRAMEBUFFER_DEVICE, O_RDWR | O_CLOEXEC);
+    if (sync_fd >= 0) {
+        lv_display_add_event_cb(
+            display,
+            [](lv_event_t* event) {
+                if (lv_display_flush_is_last(static_cast<lv_display_t*>(lv_event_get_target(event)))) {
+                    fsync(sync_fd);
+                }
+            },
+            LV_EVENT_FLUSH_FINISH,
+            nullptr);
+    }
+
     platform::init_key_input(display);
     return display;
 #endif
 }
 #endif
+
+/** ZEROGALLERY_FPS_LOG=1: cada segundo, cuántos fotogramas llegan, se recogen y se pintan. */
+void start_fps_log(lv_display_t* display) {
+    const char* wanted = std::getenv("ZEROGALLERY_FPS_LOG");
+    if (!wanted || std::strcmp(wanted, "1") != 0 || !display) {
+        return;
+    }
+    lv_display_add_event_cb(
+        display, [](lv_event_t*) { platform::fps_counters().refreshed++; }, LV_EVENT_RENDER_READY, nullptr);
+    lv_timer_create(
+        [](lv_timer_t*) {
+            auto& c = platform::fps_counters();
+            LOG_INFO("fps: published {} taken {} rendered {} polls {}",
+                     c.published.exchange(0), c.taken.exchange(0), c.refreshed.exchange(0), c.polls.exchange(0));
+        },
+        1000,
+        nullptr);
+}
 
 } // namespace
 
@@ -334,6 +372,7 @@ int Application::run() {
         LOG_ERROR("failed to initialize display");
         return 1;
     }
+    start_fps_log(display);
 
     auto* standard_font = assets.load_standard_font(14);
     view::apply_lvgl_theme(display,

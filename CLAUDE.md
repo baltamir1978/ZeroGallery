@@ -58,7 +58,12 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   Todo lo demás y todos los vídeos pasan por el `ffmpeg` del sistema como proceso aparte, que
   entrega fotogramas RGB565 de 320×170 por una tubería. Añadir un formato es añadir su
   extensión en `gallery.cpp` si ffmpeg lo abre. PSD se quitó: el ffmpeg de Debian no lo abrió.
-- **Vídeo a 15 fps** y con `-skip_loop_filter all`: la CM0 decodifica por software.
+- **Vídeo a su velocidad con 30 fps de tope** (`gallery::screen_video_fps`: 25 → 25, 60 → 30,
+  50 → 25; hasta la 0.7.0, 15 fijos) y con `-skip_loop_filter all`, **por software**. Una
+  velocidad fija distinta de la del vídeo obliga a ffmpeg a repetir fotogramas a saltos. Medido el 25-nov-2026: el panel SPI no pasa de ~37 refrescos por
+  segundo por `/dev/fb0` (contando `mipi_dbi_fb_dirty` con ftrace); un 1080p a 30 fps gasta 126 %
+  de CPU frente a 117 % a 15 (lo caro es decodificar); el decodificador por hardware aquí sale
+  peor (160 %), porque reducir a 320×170 obliga a leer sus fotogramas sin caché con la CPU.
 - **Sonido por la salida `pulse` de ffmpeg** si existe `$XDG_RUNTIME_DIR/pulse/native`, y si
   no por ALSA `default`; así quien elige altavoz, auriculares o Bluetooth es PipeWire. Si
   ffmpeg falla con sonido, se repite sin él. `ZEROGALLERY_AUDIO=none|pulse|alsa` lo fuerza.
@@ -247,6 +252,23 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.7.1 (26-nov-2026)**: vídeo fluido en la pantalla del aparato y volumen. Bruno vio tirones
+  en un vídeo de 25 fps; medido con ftrace y con contadores (`ZEROGALLERY_FPS_LOG=1` escribe
+  cada segundo cuántos fotogramas llegan, se recogen y se pintan) salieron tres causas:
+  1. 30 fps fijos con un vídeo de 25 repetían 5 de cada 25 → velocidad del propio vídeo
+     (`video_fps` con ffprobe, `gallery::screen_video_fps`).
+  2. ffmpeg escribe los fotogramas **a rachas** y el visor sólo recoge el último cada 15 ms:
+     se pintaban 11 de 25 → el hilo del reproductor los entrega **a su hora** (`next_due`).
+  3. El framebuffer del panel es de E/S diferida: lo escrito por mmap el kernel lo manda cuando
+     quiere (~6/s con el vídeo) → `fsync(/dev/fb0)` tras el último trozo de cada fotograma
+     (`LV_EVENT_FLUSH_FINISH` en `app.cpp`).
+  Resultado medido en `cpzero` con Formentera (600×344, 25 fps): llegan, se recogen y se pintan
+  25 por segundo, el panel refresca 27 veces por segundo, CPU libre 80 %. Además: `Fn`+`D`/`S`
+  (KEY_VOLUMEUP/DOWN) suben y bajan el volumen de PipeWire de 5 en 5 con `pactl` y `Fn`+`A`
+  (KEY_MUTE) lo silencia, con una barra 1 s en el centro (de lado, más corta); por el HDMI o en la
+  tele avisa de que se use su mando. ffmpeg ya no hereda los descriptores de la galería
+  (`close_range`). Bruno ha probado el volumen («va perfecto»); **sin confirmar a ojo** que el
+  vídeo va fluido.
 - **0.7.0 (25-nov-2026)**: tecla A en el visor: altavoz, cascos o HDMI (ver «Decisiones»). Con
   `V` → HDMI el sonido va a la tele. Probado en `cpzero` con una tele simulada (EDID con sonido):
   sonido por HDMI a tiempo real (~48 900 muestras/s, sin XRUN), A lo pasa al altavoz y el vídeo

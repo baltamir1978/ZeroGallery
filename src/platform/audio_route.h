@@ -52,6 +52,20 @@ public:
     audio::Output set(audio::Output output);
     /** La siguiente disponible (tecla A). */
     audio::Output cycle();
+
+    /** El volumen del sistema; `percent` -1 si no hay PipeWire. */
+    struct Volume {
+        int percent = -1;
+        bool muted = false;
+    };
+    /**
+     * Sube o baja el volumen del sistema (el de PipeWire, que es el que oyen el altavoz y los
+     * cascos) `delta` puntos, sin pasar de 100 %, y quita el silencio al subir. Devuelve cómo
+     * queda. Al HDMI no le afecta: va por `aplay`.
+     */
+    static Volume change_volume(int delta);
+    /** Pone o quita el silencio. */
+    static Volume toggle_mute();
 };
 
 /**

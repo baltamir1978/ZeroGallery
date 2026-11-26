@@ -62,8 +62,27 @@ void test_eld() {
 
 } // namespace
 
+void test_volume() {
+    CHECK(audio::volume_from_pactl(
+              "Volume: front-left: 19660 /  30% / -31.37 dB,   front-right: 19660 /  30% / -31.37 dB\n"
+              "        balance 0.00\n") == 30);
+    CHECK(audio::volume_from_pactl("Volume: mono: 65536 / 100% / 0.00 dB") == 100);
+    CHECK(audio::volume_from_pactl("Volume: front-left: 0 /   0% / -inf dB") == 0);
+    CHECK(audio::volume_from_pactl("") == -1);
+    CHECK(audio::volume_from_pactl("Connection failure: Connection refused") == -1);
+    CHECK(audio::stepped_volume(30, audio::kVolumeStep) == 35);
+    CHECK(audio::stepped_volume(30, -audio::kVolumeStep) == 25);
+    CHECK(audio::stepped_volume(98, 5) == 100); // pactl deja pasar de 100 %: aquí no
+    CHECK(audio::stepped_volume(3, -5) == 0);
+    CHECK(audio::stepped_volume(120, 5) == 100);
+    CHECK(audio::muted_from_pactl("Mute: yes\n"));
+    CHECK(!audio::muted_from_pactl("Mute: no\n"));
+    CHECK(!audio::muted_from_pactl(""));
+}
+
 int main() {
     test_next_output();
+    test_volume();
     test_default_and_names();
     test_eld();
     if (failures) {

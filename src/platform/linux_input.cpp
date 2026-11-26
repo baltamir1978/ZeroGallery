@@ -1,5 +1,7 @@
 #include "linux_input.h"
 
+#include "gallery.h"
+
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -118,6 +120,8 @@ bool is_repeatable(uint32_t key) {
         case 'x':
         case 'z':
         case 'c':
+        case gallery::kKeyVolumeUp: // mantenerla lo sube o lo baja seguido
+        case gallery::kKeyVolumeDown:
             return true;
         default:
             return false;
@@ -269,6 +273,12 @@ uint32_t map_evdev_key(uint16_t code) {
             return '7';
         case KEY_8:
             return '8';
+        case KEY_VOLUMEUP:
+            return gallery::kKeyVolumeUp;
+        case KEY_VOLUMEDOWN:
+            return gallery::kKeyVolumeDown;
+        case KEY_MUTE:
+            return gallery::kKeyMute;
         case KEY_SYSRQ:
             return kKeyPrintScreen;
         case KEY_HELP:

@@ -34,7 +34,8 @@ BaseViewModel::BaseViewModel(std::filesystem::path start_directory)
       playback_subject_(0),
       seek_subject_(0),
       cast_subject_(0),
-      audio_subject_(0) {}
+      audio_subject_(0),
+      volume_subject_(0) {}
 
 BaseViewModel::~BaseViewModel() = default;
 
@@ -84,6 +85,14 @@ lv_subject_t* BaseViewModel::audio_subject() {
 
 const char* BaseViewModel::audio_output_name() const {
     return audio::output_name(audio_.output());
+}
+
+lv_subject_t* BaseViewModel::volume_subject() {
+    return volume_subject_.native();
+}
+
+const BaseViewModel::VolumeState& BaseViewModel::volume_state() const {
+    return volume_;
 }
 
 void BaseViewModel::set_audio(audio::Output output) {
@@ -228,6 +237,32 @@ bool BaseViewModel::handle_key(uint32_t key) {
     }
     if (picker_open_) {
         return handle_picker(action);
+    }
+    if (action == gallery::Action::VolumeUp || action == gallery::Action::VolumeDown ||
+        action == gallery::Action::Mute) {
+        // Sólo en el visor, que es donde suena algo y donde se ve la barra.
+        if (page_ != model::AppPage::Viewer) {
+            return false;
+        }
+        volume_ = {};
+        if (casting() || audio_.output() == audio::Output::Hdmi) {
+            // Por el HDMI el sonido va por aplay, sin PipeWire; en la tele, el de la tele.
+            volume_.notice = "Volume: use the TV remote";
+        }
+        else {
+            const auto now = action == gallery::Action::Mute
+                                 ? platform::AudioRoute::toggle_mute()
+                                 : platform::AudioRoute::change_volume(action == gallery::Action::VolumeUp
+                                                                           ? audio::kVolumeStep
+                                                                           : -audio::kVolumeStep);
+            volume_.percent = now.percent;
+            volume_.muted = now.muted;
+            if (now.percent < 0) {
+                volume_.notice = "Volume: no sound server";
+            }
+        }
+        volume_subject_.set(volume_subject_.value() + 1);
+        return true;
     }
     if (action == gallery::Action::Audio) {
         // Por dónde suena: sólo en el visor, que es donde suena algo.

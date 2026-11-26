@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "gallery.h"
 #include "desktop_simulator_frame.h"
 
 #if USE_DESKTOP
@@ -62,6 +63,12 @@ uint32_t map_control_key(SDL_Keycode key) {
             return platform::kKeyPrintScreen;
         case SDLK_HELP:
             return platform::kKeyHelp;
+        case SDLK_VOLUMEUP:
+            return gallery::kKeyVolumeUp;
+        case SDLK_VOLUMEDOWN:
+            return gallery::kKeyVolumeDown;
+        case SDLK_MUTE:
+            return gallery::kKeyMute;
         case SDLK_4:
         case SDLK_KP_4:
             return '4';

@@ -35,7 +35,7 @@ constexpr std::array<HelpRow, 6> kViewerRows = {{
     {"Z/C  X/F", "Video -/+10 s, -/+30 s"},
     {"ENTER", "Pause / play video"},
     {"V", "Send to TV or HDMI / stop"},
-    {"A", "Sound: speaker/phones/HDMI"},
+    {"A  Fn+A/S/D", "Sound output; mute, vol -/+"},
     {"ESC", "Back (hold: exit)"},
 }};
 

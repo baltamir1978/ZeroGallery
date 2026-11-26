@@ -71,6 +71,19 @@ public:
     /** Por dónde suena ahora, para el rótulo: «Speaker», «Headphones», «HDMI». */
     const char* audio_output_name() const;
 
+    /** Cambia con cada pulsación de las teclas de volumen o de silencio (en el visor). */
+    lv_subject_t* volume_subject();
+    /**
+     * Cómo ha quedado tras la última: `percent` y `muted` para la barra; si `percent` es -1,
+     * no se ha podido cambiar y `notice` dice por qué (por el HDMI o en la tele, el mando).
+     */
+    struct VolumeState {
+        int percent = -1;
+        bool muted = false;
+        std::string notice;
+    };
+    const VolumeState& volume_state() const;
+
     // Cómo va lo que se está mandando, venga de una tele o del HDMI (para el visor).
     std::string output_name() const;
     platform::CastState output_state() const;
@@ -130,6 +143,8 @@ private:
     reactive::IntSubject seek_subject_;
     reactive::IntSubject cast_subject_;
     reactive::IntSubject audio_subject_;
+    reactive::IntSubject volume_subject_;
+    VolumeState volume_;
     platform::AudioRoute audio_;
     int seek_seconds_{0};
     std::unique_ptr<platform::DlnaCaster> caster_;

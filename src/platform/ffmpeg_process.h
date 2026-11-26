@@ -71,4 +71,7 @@ std::string audio_output();
  */
 std::string probe_text(const std::vector<std::string>& arguments);
 
+/** Lo mismo con otro programa (`tool`, buscado en el PATH): `pactl` para el volumen. */
+std::string command_text(const char* tool, const std::vector<std::string>& arguments);
+
 } // namespace platform

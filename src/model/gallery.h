@@ -44,7 +44,20 @@ enum class Action {
     ToggleTheme,
     Cast,  // mandar a la tele (o dejar de mandar)
     Audio, // por dónde suena: altavoz, cascos o HDMI
+    VolumeUp,
+    VolumeDown,
+    Mute,
 };
+
+/**
+ * Las teclas de volumen del Cardputer (KEY_VOLUMEUP y KEY_VOLUMEDOWN de su teclado: Fn+D y
+ * Fn+S; KEY_MUTE es Fn+A), con el
+ * mismo prefijo que las especiales de platform/linux_input.h (0x200000) para no chocar con
+ * ningún carácter.
+ */
+constexpr uint32_t kKeyVolumeUp = 0x200000U | 20U;
+constexpr uint32_t kKeyVolumeDown = 0x200000U | 21U;
+constexpr uint32_t kKeyMute = 0x200000U | 22U; // KEY_MUTE: Fn+A en el Cardputer
 
 /**
  * Traduce una tecla (código de LVGL o carácter) a una acción.
@@ -117,6 +130,20 @@ int rotation_from_gravity(double sensor_x, double sensor_y, double sensor_z, int
 
 /** Con 1 y 3 cuartos de vuelta la imagen se pinta en vertical: 170×320 en vez de 320×170. */
 bool rotation_swaps_axes(int turns);
+
+/** Lo más que se saca a la pantalla del aparato: el panel SPI no pasa de ~37 refrescos/s. */
+constexpr double kMaxScreenFps = 30.0;
+
+/**
+ * A cuántos fotogramas por segundo se saca un vídeo de `source_fps` en la pantalla del aparato.
+ * Su propia velocidad si cabe, y si no, la mitad, un tercio… (60 → 30, 50 → 25): con una
+ * velocidad fija ffmpeg tendría que repetir o tirar fotogramas a saltos (un vídeo de 25 a 30
+ * repite 5 de cada 25 y da tirones). Sin dato (0, negativo o absurdo), kMaxScreenFps.
+ */
+double screen_video_fps(double source_fps);
+
+/** "30000/1001" o "25" (como lo da ffprobe) en número; 0 si no se entiende o es 0/0. */
+double parse_frame_rate(const std::string& text);
 
 /**
  * Gira una imagen ya compuesta para como se va a ver (`screen_width`×`screen_height`, o al

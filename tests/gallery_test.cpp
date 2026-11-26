@@ -378,6 +378,37 @@ void test_session() {
     fs::remove_all(root);
 }
 
+void test_volume_keys() {
+    CHECK(gallery::action_for_key(gallery::kKeyVolumeUp) == gallery::Action::VolumeUp);
+    CHECK(gallery::action_for_key(gallery::kKeyVolumeDown) == gallery::Action::VolumeDown);
+    CHECK(gallery::action_for_key(gallery::kKeyMute) == gallery::Action::Mute);
+    CHECK(gallery::action_for_key('a') == gallery::Action::Audio); // A sin Fn sigue siendo la salida
+}
+
+void test_video_fps() {
+    auto near = [](double a, double b) { return a > b - 0.001 && a < b + 0.001; };
+    CHECK(near(gallery::screen_video_fps(25.0), 25.0)); // el de Formentera: sin repetir fotogramas
+    CHECK(near(gallery::screen_video_fps(24.0), 24.0));
+    CHECK(near(gallery::screen_video_fps(30.0), 30.0));
+    CHECK(near(gallery::screen_video_fps(29.97), 29.97));
+    CHECK(near(gallery::screen_video_fps(10.0), 10.0));
+    CHECK(near(gallery::screen_video_fps(60.0), 30.0));
+    CHECK(near(gallery::screen_video_fps(59.94), 29.97));
+    CHECK(near(gallery::screen_video_fps(50.0), 25.0));
+    CHECK(near(gallery::screen_video_fps(48.0), 24.0));
+    CHECK(near(gallery::screen_video_fps(120.0), 30.0));
+    CHECK(near(gallery::screen_video_fps(0.0), 30.0));
+    CHECK(near(gallery::screen_video_fps(-1.0), 30.0));
+    CHECK(near(gallery::screen_video_fps(90000.0), 30.0)); // r_frame_rate sin sentido
+
+    CHECK(near(gallery::parse_frame_rate("25/1"), 25.0));
+    CHECK(near(gallery::parse_frame_rate("30000/1001"), 29.97));
+    CHECK(near(gallery::parse_frame_rate("24"), 24.0));
+    CHECK(gallery::parse_frame_rate("0/0") == 0.0);
+    CHECK(gallery::parse_frame_rate("") == 0.0);
+    CHECK(gallery::parse_frame_rate("N/A") == 0.0);
+}
+
 } // namespace
 
 int main() {
@@ -390,6 +421,8 @@ int main() {
     test_rotation_from_gravity();
     test_rotate_to_screen();
     test_session();
+    test_video_fps();
+    test_volume_keys();
 
     if (failures) {
         std::printf("%d comprobaciones fallidas\n", failures);

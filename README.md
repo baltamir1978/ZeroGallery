@@ -27,7 +27,8 @@ red y batería, tema claro u oscuro, ayuda con `Fn`+`H` y captura con `Fn`+`J`.
 - **GIF y APNG animados** se reproducen en bucle.
 - **Vídeos** con `ffmpeg`: MP4, MOV, MKV, WebM, AVI, MPEG, TS/MTS, WMV, FLV, OGV, 3GP… con
   cualquier códec que traiga el ffmpeg de Debian (H.264, HEVC, VP9, AV1, MPEG-2/4, Theora…).
-  Se ven a 15 fotogramas por segundo, ajustados a la pantalla de 320×170.
+  Se ven a su propia velocidad (25, 24, 30…) con 30 fotogramas por segundo de tope, ajustados a la
+  pantalla de 320×170: un vídeo de 60 sale a 30 y uno de 50 a 25, sin repetir ni saltarse fotogramas.
 - **Gira con el aparato**: en el visor, al poner el Cardputer de lado o boca abajo la foto o
   el vídeo se dan la vuelta para seguir viéndose derechos (lo dice el acelerómetro), y de lado
   se encajan en 170×320, que es como mejor se ven las fotos y los vídeos verticales. Tumbado
@@ -133,6 +134,8 @@ Las flechas del Cardputer Zero están en `F`, `Z`, `X` y `C`: valen **con o sin 
 | `Esc` **mantenido** | Salir de la app | Salir de la app | Salir de la app |
 | `V` | Dejar de mandar a la tele | Mandar a la tele / dejar de mandar | Lo mismo |
 | `A` | — | Por dónde suena: altavoz, cascos o HDMI | Lo mismo (sigue donde iba) |
+| `Fn`+`D` / `Fn`+`S` | — | Subir / bajar el volumen (de 5 en 5; mantenida, seguido) | Lo mismo |
+| `Fn`+`A` | — | Silenciar / quitar el silencio | Lo mismo |
 | `T` | Tema claro / oscuro (se recuerda) | Lo mismo | Lo mismo |
 | `Fn`+`H` | Ayuda | Ayuda | Ayuda |
 | `Fn`+`J` | Captura en `~/Pictures/Screenshots` | Lo mismo | Lo mismo |
@@ -202,6 +205,10 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.7.1 (26-nov-2026)** — los vídeos se ven fluidos en la pantalla del aparato: a su propia
+velocidad (30 de tope) y con todos sus fotogramas (antes llegaban a la pantalla unos 6 de cada
+25). Volumen con `Fn`+`D`/`S` y silencio con `Fn`+`A`, con una barra durante un segundo.
 
 **0.7.0 (25-nov-2026)** — `A` elige por dónde suena: altavoz, cascos o HDMI, y al mandar al
 HDMI el sonido va a la tele. Probado con una tele simulada; sin probar los cascos ni con una

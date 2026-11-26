@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "fps_counters.h"
 #include "viewer_screen.h"
 
 #include "asset_manager.h"
@@ -17,6 +18,8 @@ namespace {
 constexpr uint32_t kPollPeriodMs = 15;
 // El rótulo con el nombre se quita solo para no tapar la foto.
 constexpr uint32_t kCaptionMs = 2500;
+// La barra de volumen: lo justo para ver cómo ha quedado (lo pidió Bruno: «un seg»).
+constexpr uint32_t kVolumeMs = 1000;
 // «Loading» sólo si tarda: en las fotos que abren al momento sería un parpadeo.
 constexpr uint32_t kLoadingNoticeMs = 350;
 // Separación del rótulo con el nombre a los bordes.
@@ -124,6 +127,7 @@ void ViewerScreen::build_content(lv_obj_t* content) {
     lv_obj_set_style_text_color(status_text_, lv_color_white(), 0);
     hide_status();
 
+    build_volume_bar(content, text_font);
     build_picker(content);
 
     playback_seen_ = lv_subject_get_int(view_model().playback_subject());
@@ -133,6 +137,8 @@ void ViewerScreen::build_content(lv_obj_t* content) {
     lv_subject_add_observer_obj(view_model().cast_subject(), cast_observer, content, this);
     audio_seen_ = lv_subject_get_int(view_model().audio_subject());
     lv_subject_add_observer_obj(view_model().audio_subject(), audio_observer, content, this);
+    volume_seen_ = lv_subject_get_int(view_model().volume_subject());
+    lv_subject_add_observer_obj(view_model().volume_subject(), volume_observer, content, this);
     // LVGL llama al observador al añadirlo: esa primera llamada carga lo señalado.
     lv_subject_add_observer_obj(view_model().media_subject(), media_observer, content, this);
 
@@ -184,6 +190,61 @@ void ViewerScreen::load_selected() {
     place_overlays();
 }
 
+void ViewerScreen::build_volume_bar(lv_obj_t* content, const lv_font_t* text_font) {
+    volume_box_ = lv_obj_create(content);
+    lv_obj_remove_style_all(volume_box_);
+    lv_obj_set_size(volume_box_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_transform_pivot_x(volume_box_, lv_pct(50), 0);
+    lv_obj_set_style_transform_pivot_y(volume_box_, lv_pct(50), 0);
+    lv_obj_set_style_bg_color(volume_box_, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(volume_box_, LV_OPA_70, 0);
+    lv_obj_set_style_radius(volume_box_, 8, 0);
+    lv_obj_set_style_pad_hor(volume_box_, 10, 0);
+    lv_obj_set_style_pad_ver(volume_box_, 6, 0);
+    lv_obj_set_style_pad_column(volume_box_, 8, 0);
+    lv_obj_set_flex_flow(volume_box_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(volume_box_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(volume_box_, LV_OBJ_FLAG_SCROLLABLE);
+
+    const lv_font_t* icon_font = assets().load_font("Phosphor-Fill.ttf", 20);
+    volume_icon_ = lv_label_create(volume_box_);
+    lv_obj_set_style_text_font(volume_icon_, icon_font ? icon_font : &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(volume_icon_, lv_color_white(), 0);
+    lv_obj_set_width(volume_icon_, 22);
+
+    volume_bar_ = lv_bar_create(volume_box_);
+    lv_obj_set_size(volume_bar_, 130, 8);
+    lv_bar_set_range(volume_bar_, 0, 100);
+    lv_obj_set_style_radius(volume_bar_, 4, LV_PART_MAIN);
+    lv_obj_set_style_radius(volume_bar_, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(volume_bar_, lv_color_hex(0x5A5A5E), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(volume_bar_, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(volume_bar_, LV_OPA_COVER, LV_PART_INDICATOR);
+
+    volume_label_ = lv_label_create(volume_box_);
+    lv_obj_set_style_text_font(volume_label_, text_font, 0);
+    lv_obj_set_style_text_color(volume_label_, lv_color_white(), 0);
+    lv_obj_set_width(volume_label_, 34);
+    lv_obj_set_style_text_align(volume_label_, LV_TEXT_ALIGN_RIGHT, 0);
+
+    lv_obj_add_flag(volume_box_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ViewerScreen::show_volume(int percent, bool muted) {
+    const char* icon = muted || percent == 0 ? view::ICON_SPEAKER_X
+                       : percent < 34        ? view::ICON_SPEAKER_NONE
+                       : percent < 67        ? view::ICON_SPEAKER_LOW
+                                             : view::ICON_SPEAKER_HIGH;
+    lv_label_set_text(volume_icon_, icon);
+    lv_bar_set_value(volume_bar_, percent, LV_ANIM_OFF);
+    // En silencio la barra se queda donde estaba pero en gris: al quitarlo vuelve ahí.
+    lv_obj_set_style_bg_color(volume_bar_, muted ? lv_color_hex(0x8E8E93) : lv_color_white(), LV_PART_INDICATOR);
+    lv_label_set_text(volume_label_, muted ? "Off" : (std::to_string(percent) + "%").c_str());
+    lv_obj_remove_flag(volume_box_, LV_OBJ_FLAG_HIDDEN);
+    volume_since_ = lv_tick_get();
+    place_overlays();
+}
+
 void ViewerScreen::place_overlays() {
     // Ancho de la pantalla tal como se ve ahora: de lado, los 170 del alto.
     const bool sideways = gallery::rotation_swaps_axes(turns_);
@@ -193,6 +254,10 @@ void ViewerScreen::place_overlays() {
     lv_obj_set_style_max_width(status_box_, seen_width - 24, 0);
     lv_obj_set_style_transform_rotation(status_box_, rotation, 0);
     lv_obj_center(status_box_);
+    // De lado sólo hay 170 de ancho: la barra, más corta (la caja entera mide 92 + la barra).
+    lv_obj_set_width(volume_bar_, sideways ? 64 : 130);
+    lv_obj_set_style_transform_rotation(volume_box_, rotation, 0);
+    lv_obj_center(volume_box_);
 
     // El rótulo va arriba a la izquierda de lo que se ve. LVGL gira cada objeto sobre su
     // centro sin moverlo, así que se calcula dónde cae ese centro en la pantalla real.
@@ -223,6 +288,7 @@ void ViewerScreen::place_overlays() {
 }
 
 void ViewerScreen::poll() {
+    platform::fps_counters().polls++;
     if (const int turns = orientation_->turns(); turns != turns_) {
         turns_ = turns;
         player_->set_rotation(turns_);
@@ -233,6 +299,9 @@ void ViewerScreen::poll() {
         lv_obj_invalidate(image_);
     }
 
+    if (!lv_obj_has_flag(volume_box_, LV_OBJ_FLAG_HIDDEN) && lv_tick_elaps(volume_since_) >= kVolumeMs) {
+        lv_obj_add_flag(volume_box_, LV_OBJ_FLAG_HIDDEN);
+    }
     if (!lv_obj_has_flag(caption_, LV_OBJ_FLAG_HIDDEN) && lv_tick_elaps(caption_since_) >= kCaptionMs) {
         lv_obj_add_flag(caption_, LV_OBJ_FLAG_HIDDEN);
         seek_caption_ = false;
@@ -512,12 +581,34 @@ void ViewerScreen::audio_observer(lv_observer_t* observer, lv_subject_t* subject
         return;
     }
     screen->audio_seen_ = value;
-    const std::string text = std::string("Sound: ") + screen->view_model().audio_output_name();
-    lv_label_set_text(screen->caption_, text.c_str());
-    lv_obj_remove_flag(screen->caption_, LV_OBJ_FLAG_HIDDEN);
-    screen->caption_since_ = lv_tick_get();
-    screen->seek_caption_ = false;
-    screen->place_overlays();
+    screen->show_caption(std::string("Sound: ") + screen->view_model().audio_output_name());
+}
+
+void ViewerScreen::volume_observer(lv_observer_t* observer, lv_subject_t* subject) {
+    auto* screen = static_cast<ViewerScreen*>(lv_observer_get_user_data(observer));
+    if (!screen) {
+        return;
+    }
+    const int32_t value = lv_subject_get_int(subject);
+    if (value == screen->volume_seen_) {
+        return;
+    }
+    screen->volume_seen_ = value;
+    const auto& volume = screen->view_model().volume_state();
+    if (volume.percent < 0) {
+        screen->show_caption(volume.notice);
+    }
+    else {
+        screen->show_volume(volume.percent, volume.muted);
+    }
+}
+
+void ViewerScreen::show_caption(const std::string& text) {
+    lv_label_set_text(caption_, text.c_str());
+    lv_obj_remove_flag(caption_, LV_OBJ_FLAG_HIDDEN);
+    caption_since_ = lv_tick_get();
+    seek_caption_ = false;
+    place_overlays();
 }
 
 void ViewerScreen::show_status(const char* icon, const char* text) {

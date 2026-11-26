@@ -78,6 +78,9 @@ bool FfmpegProcess::start(const std::vector<std::string>& arguments, const char*
         if (null >= 0) {
             dup2(null, STDERR_FILENO);
         }
+        // Lo demás que tenga abierto la galería no es cosa de ffmpeg: el framebuffer que abre
+        // LVGL sin O_CLOEXEC le llegaba abierto (dos veces).
+        close_range(fd3 >= 0 ? 4 : 3, ~0U, 0);
         execvp(argv[0], argv.data());
         _exit(kExitExecFailed);
     }
@@ -185,8 +188,12 @@ std::string audio_output() {
 }
 
 std::string probe_text(const std::vector<std::string>& arguments) {
+    return command_text("ffprobe", arguments);
+}
+
+std::string command_text(const char* tool, const std::vector<std::string>& arguments) {
     FfmpegProcess probe;
-    if (!probe.start(arguments, "ffprobe")) {
+    if (!probe.start(arguments, tool)) {
         return {};
     }
     std::string text;

@@ -129,6 +129,41 @@ AudioRoute::~AudioRoute() {
     g_output = audio::Output::Speaker;
 }
 
+namespace {
+
+AudioRoute::Volume read_volume() {
+    AudioRoute::Volume volume;
+    volume.percent = audio::volume_from_pactl(command_text("pactl", {"get-sink-volume", "@DEFAULT_SINK@"}));
+    volume.muted = audio::muted_from_pactl(command_text("pactl", {"get-sink-mute", "@DEFAULT_SINK@"}));
+    return volume;
+}
+
+} // namespace
+
+AudioRoute::Volume AudioRoute::change_volume(int delta) {
+    Volume volume = read_volume();
+    if (volume.percent < 0) {
+        return volume;
+    }
+    volume.percent = audio::stepped_volume(volume.percent, delta);
+    command_text("pactl", {"set-sink-volume", "@DEFAULT_SINK@", std::to_string(volume.percent) + "%"});
+    if (delta > 0 && volume.muted) {
+        command_text("pactl", {"set-sink-mute", "@DEFAULT_SINK@", "0"});
+        volume.muted = false;
+    }
+    return volume;
+}
+
+AudioRoute::Volume AudioRoute::toggle_mute() {
+    Volume volume = read_volume();
+    if (volume.percent < 0) {
+        return volume;
+    }
+    volume.muted = !volume.muted;
+    command_text("pactl", {"set-sink-mute", "@DEFAULT_SINK@", volume.muted ? "1" : "0"});
+    return volume;
+}
+
 bool AudioRoute::headphones_plugged() {
     bool plugged = false;
     return read_switch(kCodecCard, SNDRV_CTL_ELEM_IFACE_CARD, "Headphones Jack", plugged) && plugged;

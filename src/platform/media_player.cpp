@@ -3,6 +3,7 @@
  */
 
 #include "media_player.h"
+#include "fps_counters.h"
 
 #include "audio_route.h"
 #include "ffmpeg_process.h"
@@ -17,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <thread>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -34,9 +36,15 @@ extern "C" {
 namespace platform {
 namespace {
 
-// 15 fotogramas por segundo: en 320×170 se ve fluido y deja a la CM0 (cuatro núcleos a
-// 1 GHz, sin decodificación por hardware aquí) margen para vídeos de móvil a 1080p.
-constexpr int kVideoFps = 15;
+// Fotogramas por segundo: los del propio vídeo con 30 de tope (gallery::screen_video_fps;
+// hasta la 0.7.0, 15 fijos; en la 0.7.1 de pruebas, 30 fijos, que en un vídeo de 25 repetía
+// 5 fotogramas de cada 25 y daba tirones). Medido en el aparato (25-nov-2026):
+// - El panel SPI se refresca como mucho unas 37 veces por segundo por /dev/fb0
+//   (mipi_dbi_fb_dirty contado con ftrace escribiendo sin parar): 30 cabe.
+// - Lo caro es decodificar, no cuántos fotogramas salen: un 1080p a 30 fps gasta 126 % de CPU
+//   frente al 117 % a 15 (720p: 89 % frente a 79 %).
+// - Por software y no con el decodificador por hardware: para reducir a 320×170 hay que leer
+//   sus fotogramas con la CPU desde memoria sin caché y sale peor (1080p: 160 %; 720p: 152 %).
 constexpr size_t kFrameBytes = kCanvasPixels * sizeof(uint16_t);
 
 uint16_t rgb565(unsigned r, unsigned g, unsigned b) {
@@ -215,16 +223,19 @@ int upright_height(int turns) {
  * ffmpeg encaja en el lienzo tal como se va a ver y el giro a la pantalla se hace aquí
  * (`to_canvas`): son 54 400 píxeles por fotograma y así fotos y vídeos giran igual.
  */
-std::string canvas_filter(bool video, int turns) {
+std::string canvas_filter(bool video, int turns, double fps = gallery::kMaxScreenFps) {
     const int width = upright_width(turns);
     const int height = upright_height(turns);
+    char rate[32] = "";
+    if (video) {
+        std::snprintf(rate, sizeof(rate), "fps=%.3f,", fps);
+    }
     char filter[256];
     std::snprintf(filter,
                   sizeof(filter),
-                  "%s%sscale=%d:%d:force_original_aspect_ratio=decrease:flags=%s,"
+                  "%sscale=%d:%d:force_original_aspect_ratio=decrease:flags=%s,"
                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black",
-                  video ? "fps=" : "",
-                  video ? (std::to_string(kVideoFps) + ",").c_str() : "",
+                  rate,
                   width,
                   height,
                   video ? "fast_bilinear" : "area",
@@ -257,7 +268,8 @@ std::vector<std::string> video_arguments(const std::string& path,
                                          double position,
                                          const std::vector<std::string>& audio,
                                          bool loop,
-                                         int turns) {
+                                         int turns,
+                                         double fps) {
     std::vector<std::string> arguments = {"-nostdin", "-hide_banner", "-loglevel", "error",
                                           // A 320×170 no se nota y ahorra un buen pico de CPU en H.264.
                                           "-skip_loop_filter", "all",
@@ -271,7 +283,7 @@ std::vector<std::string> video_arguments(const std::string& path,
         std::snprintf(seconds, sizeof(seconds), "%.3f", position);
         arguments.insert(arguments.end(), {"-ss", seconds});
     }
-    arguments.insert(arguments.end(), {"-i", path, "-an", "-vf", canvas_filter(true, turns), "-pix_fmt", "rgb565le",
+    arguments.insert(arguments.end(), {"-i", path, "-an", "-vf", canvas_filter(true, turns, fps), "-pix_fmt", "rgb565le",
                                        "-f", "rawvideo", "pipe:1"});
     // Segunda salida del mismo proceso (altavoz, cascos o HDMI, ver audio_route.h): al salir
     // las dos del mismo reloj, imagen y sonido van a la par sin sincronizar nada aquí.
@@ -368,6 +380,7 @@ bool MediaPlayer::take_frame(uint16_t* destination) {
     }
     std::memcpy(destination, frame_.data(), kFrameBytes);
     frame_fresh_ = false;
+    fps_counters().taken++;
     return true;
 }
 
@@ -393,6 +406,7 @@ void MediaPlayer::publish(const std::vector<uint16_t>& frame, uint64_t generatio
     frame_ = frame;
     frame_fresh_ = true;
     state_ = state;
+    fps_counters().published++;
 }
 
 void MediaPlayer::fail(uint64_t generation, const std::string& message) {
@@ -541,8 +555,35 @@ static double video_duration(const std::string& path) {
     return seconds > 0.0 ? seconds : 0.0;
 }
 
+/**
+ * A cuántos fotogramas por segundo sacarlo en la pantalla: la media del vídeo (`avg_frame_rate`;
+ * en los de móvil, de velocidad variable, `r_frame_rate` puede salir absurdo) y si no la da,
+ * `r_frame_rate`; con eso, gallery::screen_video_fps.
+ */
+static double video_fps(const std::string& path) {
+    const std::string text = probe_text({"-v", "error", "-select_streams", "v:0", "-show_entries",
+                                         "stream=avg_frame_rate,r_frame_rate", "-of", "default=nw=1", path});
+    double average = 0.0, nominal = 0.0;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string::npos) {
+            end = text.size();
+        }
+        const std::string line = text.substr(start, end - start);
+        if (line.rfind("avg_frame_rate=", 0) == 0) {
+            average = gallery::parse_frame_rate(line.substr(15));
+        } else if (line.rfind("r_frame_rate=", 0) == 0) {
+            nominal = gallery::parse_frame_rate(line.substr(13));
+        }
+        start = end + 1;
+    }
+    return gallery::screen_video_fps(average > 0.0 ? average : nominal);
+}
+
 void MediaPlayer::play_video(const Request& request) {
     const bool loop = request.kind == MediaKind::Animation;
+    const double fps = video_fps(request.path);
     // Sin sonido si es una animación o si con sonido ha fallado (hasta que se cambie de salida).
     bool audio_off = loop;
     uint32_t audio_seen = audio_generation();
@@ -636,7 +677,7 @@ void MediaPlayer::play_video(const Request& request) {
         }
         const auto audio = audio_off ? std::vector<std::string>{} : audio_arguments();
         FfmpegProcess ffmpeg;
-        const bool launched = ffmpeg.start(video_arguments(request.path, position, audio, loop, turns), "ffmpeg", -1,
+        const bool launched = ffmpeg.start(video_arguments(request.path, position, audio, loop, turns, fps), "ffmpeg", -1,
                                           audio_off ? -1 : hdmi_audio.ffmpeg_fd());
         hdmi_audio.release_ffmpeg_end();
         if (!launched) {
@@ -646,6 +687,7 @@ void MediaPlayer::play_video(const Request& request) {
 
         size_t filled = 0;
         long frames = 0;
+        std::chrono::steady_clock::time_point next_due{};
         bool paused = false;
         bool rotated = false;
         double sought = 0.0;
@@ -686,13 +728,27 @@ void MediaPlayer::play_video(const Request& request) {
                 filled = 0;
                 ++frames;
                 to_canvas(upright, turns, canvas);
+                // A su hora: ffmpeg los escribe a rachas (dos o tres seguidos, entre trozos de
+                // sonido) y el visor sólo recoge el último cada 15 ms, así que de cada racha se
+                // perdían todos menos uno (medido el 26-nov-2026: llegaban 25 por segundo y se
+                // pintaban 11). Los adelantados esperan aquí; la tubería hace de colchón.
+                const auto now = std::chrono::steady_clock::now();
+                const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(1.0 / fps));
+                if (frames == 1 || now > next_due + 5 * period) {
+                    next_due = now; // al empezar, o si se ha quedado atrás: no correr para recuperar
+                }
+                else if (now < next_due) {
+                    std::this_thread::sleep_until(std::min(next_due, now + 4 * period));
+                }
+                next_due += period;
                 publish(canvas, request.generation, MediaState::Playing);
-                position_ = position + static_cast<double>(frames) / kVideoFps;
+                position_ = position + static_cast<double>(frames) / fps;
             }
         }
 
         // Una animación no sabe por dónde iba (se repite): al reanudar empieza otra vez.
-        position = loop ? 0.0 : position + static_cast<double>(frames) / kVideoFps;
+        position = loop ? 0.0 : position + static_cast<double>(frames) / fps;
         if (sought != 0.0) {
             // Saltar es lo mismo que reanudar, pero desde otro sitio: otro ffmpeg con -ss.
             position = landing(position, sought);
@@ -733,7 +789,7 @@ void MediaPlayer::play_video(const Request& request) {
         }
 
         // El último fotograma que se vio es el anterior a donde se quedó la cuenta.
-        double at = std::max(0.0, position - 1.0 / kVideoFps);
+        double at = std::max(0.0, position - 1.0 / fps);
         const Stopped next = wait_stopped(MediaState::Ended, at);
         if (next == Stopped::Superseded) {
             return;
