@@ -282,7 +282,7 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   (KEY_MUTE) lo silencia, con una barra 1 s en el centro (de lado, más corta); por el HDMI o en la
   tele avisa de que se use su mando. ffmpeg ya no hereda los descriptores de la galería
   (`close_range`). Bruno ha probado el volumen («va perfecto»); el vídeo lo ha medido Claude
-  (Bruno le pidió probarlo él «hasta que esté ok»), **sin verlo en una tele de verdad**.
+  (Bruno le pidió probarlo él «hasta que esté ok»), **sin verlo en una tele de verdad**. **Enviada a la tienda: [#887](https://github.com/CardputerZero/packages/pull/887).**
 - **0.7.0 (25-nov-2026)**: tecla A en el visor: altavoz, cascos o HDMI (ver «Decisiones»). Con
   `V` → HDMI el sonido va a la tele. Probado en `cpzero` con una tele simulada (EDID con sonido):
   sonido por HDMI a tiempo real (~48 900 muestras/s, sin XRUN), A lo pasa al altavoz y el vídeo
