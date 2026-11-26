@@ -258,17 +258,31 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
   1. 30 fps fijos con un vídeo de 25 repetían 5 de cada 25 → velocidad del propio vídeo
      (`video_fps` con ffprobe, `gallery::screen_video_fps`).
   2. ffmpeg escribe los fotogramas **a rachas** y el visor sólo recoge el último cada 15 ms:
-     se pintaban 11 de 25 → el hilo del reproductor los entrega **a su hora** (`next_due`).
+     se pintaban 11 de 25 → el hilo del reproductor los entrega **a su hora** (`FramePacer`,
+     `frame_pacer.h`, uno por cada ffmpeg). **Al HDMI le pasaba lo mismo** (ya en la 0.7.0): el
+     tercer búfer se pisa si llega otro fotograma mientras el anterior espera al refresco, y de
+     Formentera se veían 14 de 25; con `FramePacer` también en `HdmiPlayer`, 25.
   3. El framebuffer del panel es de E/S diferida: lo escrito por mmap el kernel lo manda cuando
      quiere (~6/s con el vídeo) → `fsync(/dev/fb0)` tras el último trozo de cada fotograma
      (`LV_EVENT_FLUSH_FINISH` en `app.cpp`).
-  Resultado medido en `cpzero` con Formentera (600×344, 25 fps): llegan, se recogen y se pintan
-  25 por segundo, el panel refresca 27 veces por segundo, CPU libre 80 %. Además: `Fn`+`D`/`S`
+  Mientras suena un vídeo, el visor mira cada 5 ms en vez de 15 (`kPlayingPollPeriodMs`): el
+  hueco más largo entre fotogramas a 30 fps baja de 46 a 37 ms, sin más CPU.
+  **Medido en `cpzero`** (`ZEROGALLERY_FPS_LOG=1`, ftrace de `mipi_dbi_fb_dirty`; abriendo la
+  app con un `HOME` que sólo tiene el vídeo y pulsando ENTER escribiendo en el teclado):
+  Formentera 600×344@25, 1080p@25, 720p@30, 1080p@23,976 y 1080p@29,97: todos los fotogramas,
+  ninguno con más de 1,5 periodos de hueco, CPU libre del 34 % (1080p@29,97) al 77 %; GIF a sus
+  10 fps; pausa, reanudar y saltos bien. **HDMI** con una tele simulada (EDID 1920×1080@60 con
+  sonido, generado con un script de Python; `edid_override` devuelto a `reset` al acabar) y
+  `hdmi-probe` de la 0.7.0 frente a la nueva: Formentera de 14,5 a 25,2 fotogramas/s; 1080p y
+  720p iguales en marcha (tiempo real), sin underruns, sonido por HDMI igual (por `pipe:3`, que
+  el `close_range` respeta), y lo que tarda en salir el primer fotograma igual (4–6 s con el
+  decodificador por hardware, en las dos). La 0.7.0, tras el primer fotograma, aceleraba hasta
+  alcanzar el tiempo real (2,9 s de vídeo en 2 s); ahora no. Además: `Fn`+`D`/`S`
   (KEY_VOLUMEUP/DOWN) suben y bajan el volumen de PipeWire de 5 en 5 con `pactl` y `Fn`+`A`
   (KEY_MUTE) lo silencia, con una barra 1 s en el centro (de lado, más corta); por el HDMI o en la
   tele avisa de que se use su mando. ffmpeg ya no hereda los descriptores de la galería
-  (`close_range`). Bruno ha probado el volumen («va perfecto»); **sin confirmar a ojo** que el
-  vídeo va fluido.
+  (`close_range`). Bruno ha probado el volumen («va perfecto»); el vídeo lo ha medido Claude
+  (Bruno le pidió probarlo él «hasta que esté ok»), **sin verlo en una tele de verdad**.
 - **0.7.0 (25-nov-2026)**: tecla A en el visor: altavoz, cascos o HDMI (ver «Decisiones»). Con
   `V` → HDMI el sonido va a la tele. Probado en `cpzero` con una tele simulada (EDID con sonido):
   sonido por HDMI a tiempo real (~48 900 muestras/s, sin XRUN), A lo pasa al altavoz y el vídeo

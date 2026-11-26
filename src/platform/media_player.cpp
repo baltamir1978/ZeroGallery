@@ -4,6 +4,7 @@
 
 #include "media_player.h"
 #include "fps_counters.h"
+#include "frame_pacer.h"
 
 #include "audio_route.h"
 #include "ffmpeg_process.h"
@@ -380,7 +381,9 @@ bool MediaPlayer::take_frame(uint16_t* destination) {
     }
     std::memcpy(destination, frame_.data(), kFrameBytes);
     frame_fresh_ = false;
-    fps_counters().taken++;
+    fps_counters().note_take(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch())
+                                 .count());
     return true;
 }
 
@@ -584,6 +587,8 @@ static double video_fps(const std::string& path) {
 void MediaPlayer::play_video(const Request& request) {
     const bool loop = request.kind == MediaKind::Animation;
     const double fps = video_fps(request.path);
+    fps_counters().period_ms = static_cast<unsigned>(1000.0 / fps);
+    fps_counters().last_take_ms = 0;
     // Sin sonido si es una animación o si con sonido ha fallado (hasta que se cambie de salida).
     bool audio_off = loop;
     uint32_t audio_seen = audio_generation();
@@ -687,7 +692,7 @@ void MediaPlayer::play_video(const Request& request) {
 
         size_t filled = 0;
         long frames = 0;
-        std::chrono::steady_clock::time_point next_due{};
+        FramePacer pacer(fps);
         bool paused = false;
         bool rotated = false;
         double sought = 0.0;
@@ -728,20 +733,7 @@ void MediaPlayer::play_video(const Request& request) {
                 filled = 0;
                 ++frames;
                 to_canvas(upright, turns, canvas);
-                // A su hora: ffmpeg los escribe a rachas (dos o tres seguidos, entre trozos de
-                // sonido) y el visor sólo recoge el último cada 15 ms, así que de cada racha se
-                // perdían todos menos uno (medido el 26-nov-2026: llegaban 25 por segundo y se
-                // pintaban 11). Los adelantados esperan aquí; la tubería hace de colchón.
-                const auto now = std::chrono::steady_clock::now();
-                const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                    std::chrono::duration<double>(1.0 / fps));
-                if (frames == 1 || now > next_due + 5 * period) {
-                    next_due = now; // al empezar, o si se ha quedado atrás: no correr para recuperar
-                }
-                else if (now < next_due) {
-                    std::this_thread::sleep_until(std::min(next_due, now + 4 * period));
-                }
-                next_due += period;
+                pacer.wait();
                 publish(canvas, request.generation, MediaState::Playing);
                 position_ = position + static_cast<double>(frames) / fps;
             }

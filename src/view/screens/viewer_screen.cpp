@@ -16,6 +16,9 @@ namespace screen {
 namespace {
 
 constexpr uint32_t kPollPeriodMs = 15;
+// Con un vídeo en marcha se mira más a menudo: cada fotograma sale a lo sumo 5 ms tarde en vez
+// de 15 (a 30 fps, el hueco más largo entre dos pasaba de 33 a 46 ms).
+constexpr uint32_t kPlayingPollPeriodMs = 5;
 // El rótulo con el nombre se quita solo para no tapar la foto.
 constexpr uint32_t kCaptionMs = 2500;
 // La barra de volumen: lo justo para ver cómo ha quedado (lo pidió Bruno: «un seg»).
@@ -344,6 +347,8 @@ void ViewerScreen::poll() {
     }
     shown_state_ = state;
     loading_notice_ = false;
+    lv_timer_set_period(poll_timer_,
+                        state == platform::MediaState::Playing ? kPlayingPollPeriodMs : kPollPeriodMs);
 
     switch (state) {
         case platform::MediaState::Paused:

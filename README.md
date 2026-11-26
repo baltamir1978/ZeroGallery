@@ -208,7 +208,8 @@ tests/                       pruebas de src/model (con la descripción real de u
 
 **0.7.1 (26-nov-2026)** — los vídeos se ven fluidos en la pantalla del aparato: a su propia
 velocidad (30 de tope) y con todos sus fotogramas (antes llegaban a la pantalla unos 6 de cada
-25). Volumen con `Fn`+`D`/`S` y silencio con `Fn`+`A`, con una barra durante un segundo.
+25). Por HDMI también: llegan todos los fotogramas (antes, 14 de 25). Volumen con `Fn`+`D`/`S` y
+silencio con `Fn`+`A`, con una barra durante un segundo.
 
 **0.7.0 (25-nov-2026)** — `A` elige por dónde suena: altavoz, cascos o HDMI, y al mandar al
 HDMI el sonido va a la tele. Probado con una tele simulada; sin probar los cascos ni con una

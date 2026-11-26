@@ -317,8 +317,9 @@ void start_fps_log(lv_display_t* display) {
     lv_timer_create(
         [](lv_timer_t*) {
             auto& c = platform::fps_counters();
-            LOG_INFO("fps: published {} taken {} rendered {} polls {}",
-                     c.published.exchange(0), c.taken.exchange(0), c.refreshed.exchange(0), c.polls.exchange(0));
+            LOG_INFO("fps: published {} taken {} rendered {} polls {} max_gap {} ms late {}",
+                     c.published.exchange(0), c.taken.exchange(0), c.refreshed.exchange(0), c.polls.exchange(0),
+                     c.max_gap_ms.exchange(0), c.late.exchange(0));
         },
         1000,
         nullptr);

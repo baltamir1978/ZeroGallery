@@ -3,6 +3,7 @@
  */
 
 #include "hdmi_player.h"
+#include "frame_pacer.h"
 
 #include "audio_route.h"
 #include "dlna.h"
@@ -437,6 +438,7 @@ void HdmiPlayer::play_video(const Request& request) {
 
         size_t filled = 0;
         long frames = 0;
+        FramePacer pacer(fps);
         bool paused = false;
         bool stalled = false;
         bool restart = false;
@@ -478,6 +480,7 @@ void HdmiPlayer::play_video(const Request& request) {
             if (filled == frame_bytes) {
                 filled = 0;
                 ++frames;
+                pacer.wait();
                 display_->show(frame.data(), size.width, size.height);
                 if (frames == 1) {
                     set_state(request.generation, MediaState::Playing);
