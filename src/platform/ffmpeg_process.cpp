@@ -191,7 +191,7 @@ std::string probe_text(const std::vector<std::string>& arguments) {
     return command_text("ffprobe", arguments);
 }
 
-std::string command_text(const char* tool, const std::vector<std::string>& arguments) {
+std::string command_text(const char* tool, const std::vector<std::string>& arguments, size_t max_bytes) {
     FfmpegProcess probe;
     if (!probe.start(arguments, tool)) {
         return {};
@@ -199,7 +199,7 @@ std::string command_text(const char* tool, const std::vector<std::string>& argum
     std::string text;
     char chunk[512];
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (text.size() < 4096 && std::chrono::steady_clock::now() < deadline) {
+    while (text.size() < max_bytes && std::chrono::steady_clock::now() < deadline) {
         const long count = probe.read_some(reinterpret_cast<uint8_t*>(chunk), sizeof(chunk), 100);
         if (count < 0) {
             break;

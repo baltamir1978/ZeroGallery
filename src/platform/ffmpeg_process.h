@@ -71,7 +71,11 @@ std::string audio_output();
  */
 std::string probe_text(const std::vector<std::string>& arguments);
 
-/** Lo mismo con otro programa (`tool`, buscado en el PATH): `pactl` para el volumen. */
-std::string command_text(const char* tool, const std::vector<std::string>& arguments);
+/**
+ * Lo mismo con otro programa (`tool`, buscado en el PATH): `pactl` para el volumen y las
+ * salidas. Lee como mucho `max_bytes` (la lista de salidas de pactl pasa de 4 KB).
+ */
+std::string command_text(const char* tool, const std::vector<std::string>& arguments,
+                         size_t max_bytes = 4096);
 
 } // namespace platform

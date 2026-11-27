@@ -68,8 +68,8 @@ public:
 
     /** Cambia cuando se cambia por dónde suena (tecla A, o al mandar al HDMI y dejarlo). */
     lv_subject_t* audio_subject();
-    /** Por dónde suena ahora, para el rótulo: «Speaker», «Headphones», «HDMI». */
-    const char* audio_output_name() const;
+    /** Por dónde suena ahora, para el rótulo: «Speaker», «Headphones», «HDMI» o el nombre del aparato USB o Bluetooth. */
+    std::string audio_output_name() const;
 
     /** Cambia con cada pulsación de las teclas de volumen o de silencio (en el visor). */
     lv_subject_t* volume_subject();

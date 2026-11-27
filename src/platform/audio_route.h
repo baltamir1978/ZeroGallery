@@ -31,8 +31,14 @@ namespace platform {
  * lo toca con periodos de 512 (búfer de 2048: 43 ms; la tubería, 4 KB: 21 ms; así la imagen
  * y el sonido no se separan). El volumen, con el mando de la tele.
  *
+ * Los aparatos USB y Bluetooth son salidas de PipeWire («sinks»): se listan con `pactl` y
+ * ffmpeg suena por el elegido con `-device`, sin tocar la salida por defecto del sistema (al
+ * salir de la app todo queda como estaba). Altavoz y cascos van también con `-device`, a la
+ * salida del códec: si no, al conectar unos cascos Bluetooth (que WirePlumber pone por
+ * defecto) «Speaker» sonaría por ellos.
+ *
  * La salida elegida es una sola para toda la app (los dos reproductores la leen al lanzar
- * ffmpeg) y `generation()` cambia cuando hay que relanzarlo (de o hacia el HDMI).
+ * ffmpeg) y `generation()` cambia cuando hay que relanzarlo (de o hacia el HDMI o un aparato).
  */
 class AudioRoute {
 public:
@@ -48,8 +54,14 @@ public:
     static bool hdmi_audio_available();
 
     audio::Output output() const;
-    /** Pone `output` (si no está disponible, la del aparato). Devuelve la que queda. */
+    /** Lo elegido, con el aparato si es USB o Bluetooth. */
+    audio::Choice choice() const;
+    /**
+     * Pone `output` (si no está disponible, la del aparato). Devuelve la que queda. Para un
+     * aparato USB o Bluetooth, `set(Choice)`.
+     */
     audio::Output set(audio::Output output);
+    audio::Output set(const audio::Choice& choice);
     /** La siguiente disponible (tecla A). */
     audio::Output cycle();
 
@@ -59,9 +71,9 @@ public:
         bool muted = false;
     };
     /**
-     * Sube o baja el volumen del sistema (el de PipeWire, que es el que oyen el altavoz y los
-     * cascos) `delta` puntos, sin pasar de 100 %, y quita el silencio al subir. Devuelve cómo
-     * queda. Al HDMI no le afecta: va por `aplay`.
+     * Sube o baja el volumen de PipeWire de la salida elegida (la del códec con el altavoz o
+     * los cascos, la del aparato USB o Bluetooth) `delta` puntos, sin pasar de 100 %, y quita
+     * el silencio al subir. Devuelve cómo queda. Al HDMI no le afecta: va por `aplay`.
      */
     static Volume change_volume(int delta);
     /** Pone o quita el silencio. */

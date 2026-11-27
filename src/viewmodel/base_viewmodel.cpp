@@ -83,8 +83,8 @@ lv_subject_t* BaseViewModel::audio_subject() {
     return audio_subject_.native();
 }
 
-const char* BaseViewModel::audio_output_name() const {
-    return audio::output_name(audio_.output());
+std::string BaseViewModel::audio_output_name() const {
+    return audio::choice_name(audio_.choice());
 }
 
 lv_subject_t* BaseViewModel::volume_subject() {

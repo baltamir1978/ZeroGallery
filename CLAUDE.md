@@ -252,6 +252,29 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Estado
 
+- **0.8.0 (27-nov-2026)**: la tecla A también lista los **aparatos USB y Bluetooth** de PipeWire
+  por su nombre (Speaker → Headphones → HDMI → cada aparato → Speaker). Bruno lo pidió el 26-nov
+  («¿saca el sonido por USB y Bluetooth?»).
+  - Lista: `pactl --format=json list sinks` (`audio::sinks_from_pactl_json`, JSON leído a mano:
+    sólo `name`, `description`, `device.bus`, `device.api`); se pide en cada pulsación de A
+    (los Bluetooth van y vienen). Aparato = `device.bus` usb/bluetooth o `device.api` bluez5.
+  - ffmpeg suena por el elegido con `-f pulse -device <sink> Gallery`, **sin cambiar la salida
+    por defecto** del sistema. Altavoz y cascos van también con `-device` a la salida del códec
+    (`audio::internal_sink`: la primera tarjeta ALSA que no es USB ni HDMI): si no, unos cascos
+    Bluetooth que WirePlumber pusiera por defecto se quedarían con «Speaker».
+  - **Ojo: ZeroPower crea una salida muda (`zeropower_null`, `module-null-sink`)** para callar
+    al lanzador con la pantalla apagada, y va la primera de la lista: no es la del códec (no
+    tiene `device.api`). Cazado en el aparato antes de instalar; la lista real está en
+    `tests/fixtures/pactl-sinks-cardputer.json`.
+  - Si el aparato elegido desaparece, pipewire-pulse manda el sonido a la salida por defecto
+    (ffmpeg con un `-device` que no existe no falla); la siguiente A vuelve al altavoz.
+  - Fn+D/S/A: el volumen de la salida elegida (antes, `@DEFAULT_SINK@`).
+  - Por SSH `pactl` necesita `XDG_RUNTIME_DIR=/run/user/1000` (Tailscale SSH no lo pone).
+  - Probado en `cpzero`: el vídeo suena por el códec con `-device`; **Bruno probó unos cascos
+    USB (Sennheiser «UC USB Headset»): «funciona»**. Sin probar: Bluetooth (está apagado por
+    ZeroPower) y el volumen con un aparato elegido. Recordar: el USB-A sólo va con el interruptor
+    en *Host*.
+
 - **0.7.1 (26-nov-2026)**: vídeo fluido en la pantalla del aparato y volumen. Bruno vio tirones
   en un vídeo de 25 fps; medido con ftrace y con contadores (`ZEROGALLERY_FPS_LOG=1` escribe
   cada segundo cuántos fotogramas llegan, se recogen y se pintan) salieron tres causas:

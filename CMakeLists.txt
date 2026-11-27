@@ -6,7 +6,7 @@
 
 cmake_minimum_required(VERSION 3.31)
 
-project(zerogallery VERSION 0.7.1 LANGUAGES C CXX)
+project(zerogallery VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -652,6 +652,7 @@ if(USE_DESKTOP)
     add_test(NAME hdmi_test COMMAND hdmi_test)
     add_executable(audio_test tests/audio_test.cpp)
     target_link_libraries(audio_test PRIVATE ${PROJECT_NAME}_model)
+    target_compile_definitions(audio_test PRIVATE FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     add_test(NAME audio_test COMMAND audio_test)
 endif()
 

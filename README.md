@@ -109,9 +109,16 @@ Lo que pide cada aparato (DLNA es un estándar, pero cada marca lo pone a su man
 ## Por dónde suena
 
 Con una foto o un vídeo delante, `A` cambia por dónde suena: **altavoz** del Cardputer,
-**cascos** (sólo si hay unos enchufados) y **HDMI** (sólo si hay una pantalla que acepta sonido).
-Arriba sale «Sound: …» un momento. Si un vídeo está en marcha, sigue desde donde iba por la
-salida nueva.
+**cascos** (sólo si hay unos enchufados), **HDMI** (sólo si hay una pantalla que acepta sonido)
+y cada **aparato USB o Bluetooth** conectado (una tarjeta de sonido, unos cascos, un altavoz),
+por su nombre. Arriba sale «Sound: …» un momento. Si un vídeo está en marcha, sigue desde
+donde iba por la salida nueva.
+
+- Los aparatos USB y Bluetooth son los que tenga PipeWire: hay que conectarlos antes (en el
+  Cardputer Zero, el USB-A sólo da corriente con el interruptor en *Host*, y el Bluetooth hay
+  que encenderlo y emparejar). La salida por defecto del sistema no se toca: al salir de la
+  app todo queda como estaba.
+- Con un aparato elegido, `Fn`+`D`/`S`/`A` suben, bajan y silencian el volumen de ese aparato.
 
 - Al mandar al HDMI con `V`, el sonido pasa solo a la tele; al dejar de mandar, vuelve al
   Cardputer.
@@ -205,6 +212,10 @@ tests/                       pruebas de src/model (con la descripción real de u
 - La lista sólo crea las seis filas que caben en pantalla, tenga la carpeta las fotos que tenga.
 
 ## Estado
+
+**0.8.0 (27-nov-2026)** — `A` también saca el sonido por aparatos USB y Bluetooth (una tarjeta
+de sonido, unos cascos, un altavoz), que salen por su nombre; el volumen va al elegido. Probado
+con unos cascos USB; Bluetooth, sin probar.
 
 **0.7.1 (26-nov-2026)** — los vídeos se ven fluidos en la pantalla del aparato: a su propia
 velocidad (30 de tope) y con todos sus fotogramas (antes llegaban a la pantalla unos 6 de cada

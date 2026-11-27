@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 
 #include <fcntl.h>
@@ -31,6 +32,46 @@ constexpr const char* kHdmiPcm = "hdmi:CARD=vc4hdmi,DEV=0";
 
 std::atomic<audio::Output> g_output{audio::Output::Speaker};
 std::atomic<uint32_t> g_generation{0};
+
+// Los nombres de PipeWire: el aparato elegido (con External) y la salida del códec. Los leen
+// los hilos de los reproductores al lanzar ffmpeg.
+std::mutex g_sinks_mutex;
+audio::Choice g_choice;
+std::string g_internal_sink;
+
+/** Hasta dónde se lee la lista de pactl: unos 3 KB por salida. */
+constexpr size_t kSinksMaxBytes = 256 * 1024;
+
+/** Las salidas de PipeWire; vacío si no hay PipeWire (o se ha forzado ALSA o nada). */
+std::vector<audio::Sink> list_sinks() {
+    if (audio_output() != "pulse") {
+        return {};
+    }
+    return audio::sinks_from_pactl_json(
+        command_text("pactl", {"--format=json", "list", "sinks"}, kSinksMaxBytes));
+}
+
+/** A qué salida de PipeWire va lo elegido; vacío: la de por defecto. */
+std::string pulse_device(const audio::Choice& choice, const std::string& internal) {
+    switch (choice.output) {
+        case audio::Output::External:
+            return choice.sink;
+        case audio::Output::Speaker:
+        case audio::Output::Headphones:
+            return internal;
+        case audio::Output::Hdmi:
+            return {};
+    }
+    return {};
+}
+
+/** Lo que ffmpeg tiene que saber: si cambia, hay que relanzarlo. */
+std::string ffmpeg_target(const audio::Choice& choice) {
+    if (choice.output == audio::Output::Hdmi) {
+        return "\x01hdmi";
+    }
+    return choice.output == audio::Output::External ? choice.sink : std::string();
+}
 
 std::string read_text(const std::string& path) {
     std::ifstream file(path);
@@ -115,7 +156,11 @@ bool speaker_touched = false;
 } // namespace
 
 AudioRoute::AudioRoute() {
-    g_output = audio::device_default(headphones_plugged());
+    const std::string internal = audio::internal_sink(list_sinks());
+    std::lock_guard<std::mutex> lock(g_sinks_mutex);
+    g_internal_sink = internal;
+    g_choice = audio::Choice{audio::device_default(headphones_plugged()), {}, {}};
+    g_output = g_choice.output;
 }
 
 AudioRoute::~AudioRoute() {
@@ -123,44 +168,55 @@ AudioRoute::~AudioRoute() {
         set_speaker(!headphones_plugged());
         speaker_touched = false;
     }
-    if (g_output == audio::Output::Hdmi) {
+    if (g_output == audio::Output::Hdmi || g_output == audio::Output::External) {
         ++g_generation;
     }
+    std::lock_guard<std::mutex> lock(g_sinks_mutex);
+    g_choice = audio::Choice{};
     g_output = audio::Output::Speaker;
 }
 
 namespace {
 
-AudioRoute::Volume read_volume() {
+/** La salida de PipeWire a la que van las teclas de volumen: la elegida, o la de por defecto. */
+std::string volume_sink() {
+    std::lock_guard<std::mutex> lock(g_sinks_mutex);
+    const std::string device = pulse_device(g_choice, g_internal_sink);
+    return device.empty() ? "@DEFAULT_SINK@" : device;
+}
+
+AudioRoute::Volume read_volume(const std::string& sink) {
     AudioRoute::Volume volume;
-    volume.percent = audio::volume_from_pactl(command_text("pactl", {"get-sink-volume", "@DEFAULT_SINK@"}));
-    volume.muted = audio::muted_from_pactl(command_text("pactl", {"get-sink-mute", "@DEFAULT_SINK@"}));
+    volume.percent = audio::volume_from_pactl(command_text("pactl", {"get-sink-volume", sink}));
+    volume.muted = audio::muted_from_pactl(command_text("pactl", {"get-sink-mute", sink}));
     return volume;
 }
 
 } // namespace
 
 AudioRoute::Volume AudioRoute::change_volume(int delta) {
-    Volume volume = read_volume();
+    const std::string sink = volume_sink();
+    Volume volume = read_volume(sink);
     if (volume.percent < 0) {
         return volume;
     }
     volume.percent = audio::stepped_volume(volume.percent, delta);
-    command_text("pactl", {"set-sink-volume", "@DEFAULT_SINK@", std::to_string(volume.percent) + "%"});
+    command_text("pactl", {"set-sink-volume", sink, std::to_string(volume.percent) + "%"});
     if (delta > 0 && volume.muted) {
-        command_text("pactl", {"set-sink-mute", "@DEFAULT_SINK@", "0"});
+        command_text("pactl", {"set-sink-mute", sink, "0"});
         volume.muted = false;
     }
     return volume;
 }
 
 AudioRoute::Volume AudioRoute::toggle_mute() {
-    Volume volume = read_volume();
+    const std::string sink = volume_sink();
+    Volume volume = read_volume(sink);
     if (volume.percent < 0) {
         return volume;
     }
     volume.muted = !volume.muted;
-    command_text("pactl", {"set-sink-mute", "@DEFAULT_SINK@", volume.muted ? "1" : "0"});
+    command_text("pactl", {"set-sink-mute", sink, volume.muted ? "1" : "0"});
     return volume;
 }
 
@@ -181,30 +237,58 @@ audio::Output AudioRoute::output() const {
     return g_output;
 }
 
+audio::Choice AudioRoute::choice() const {
+    std::lock_guard<std::mutex> lock(g_sinks_mutex);
+    return g_choice;
+}
+
 audio::Output AudioRoute::set(audio::Output output) {
+    return set(audio::Choice{output, {}, {}});
+}
+
+audio::Output AudioRoute::set(const audio::Choice& wanted) {
+    audio::Choice choice = wanted;
     const bool headphones = headphones_plugged();
-    if ((output == audio::Output::Headphones && !headphones) ||
-        (output == audio::Output::Hdmi && !hdmi_audio_available())) {
-        output = audio::device_default(headphones);
+    if ((choice.output == audio::Output::Headphones && !headphones) ||
+        (choice.output == audio::Output::Hdmi && !hdmi_audio_available()) ||
+        (choice.output == audio::Output::External && choice.sink.empty())) {
+        choice = audio::Choice{audio::device_default(headphones), {}, {}};
     }
-    const audio::Output before = g_output;
-    // Altavoz o cascos: el interruptor del altavoz. Con el HDMI no se toca: lo que el
-    // Cardputer tenga puesto vuelve tal cual al dejarlo.
-    if (output == audio::Output::Speaker) {
+    if (choice.output != audio::Output::External) {
+        choice.sink.clear();
+        choice.label.clear();
+    }
+    // Altavoz o cascos: el interruptor del altavoz. Con el HDMI o un aparato no se toca: lo
+    // que el Cardputer tenga puesto vuelve tal cual al dejarlo.
+    if (choice.output == audio::Output::Speaker) {
         speaker_touched = set_speaker(true) || speaker_touched;
     }
-    else if (output == audio::Output::Headphones) {
+    else if (choice.output == audio::Output::Headphones) {
         speaker_touched = set_speaker(false) || speaker_touched;
     }
-    g_output = output;
-    if ((before == audio::Output::Hdmi) != (output == audio::Output::Hdmi)) {
+    std::lock_guard<std::mutex> lock(g_sinks_mutex);
+    const bool relaunch = ffmpeg_target(g_choice) != ffmpeg_target(choice);
+    g_choice = choice;
+    g_output = choice.output;
+    if (relaunch) {
         ++g_generation;
     }
-    return output;
+    return choice.output;
 }
 
 audio::Output AudioRoute::cycle() {
-    return set(audio::next_output(g_output, headphones_plugged(), hdmi_audio_available()));
+    // La lista se pide en cada pulsación: los aparatos Bluetooth van y vienen.
+    const auto sinks = list_sinks();
+    const std::string internal = audio::internal_sink(sinks);
+    audio::Choice current;
+    {
+        std::lock_guard<std::mutex> lock(g_sinks_mutex);
+        if (!internal.empty()) {
+            g_internal_sink = internal;
+        }
+        current = g_choice;
+    }
+    return set(audio::next_choice(current, headphones_plugged(), hdmi_audio_available(), sinks));
 }
 
 audio::Output current_audio_output() {
@@ -261,8 +345,19 @@ std::vector<std::string> audio_arguments() {
     if (output.empty()) {
         return {};
     }
-    // En «pulse» lo último es el nombre con que aparece en el mezclador; en «alsa», el dispositivo.
-    return {"-vn", "-ac", "2", "-f", output, output == "pulse" ? "Gallery" : "default"};
+    if (output != "pulse") {
+        return {"-vn", "-ac", "2", "-f", output, "default"};
+    }
+    std::string device;
+    {
+        std::lock_guard<std::mutex> lock(g_sinks_mutex);
+        device = pulse_device(g_choice, g_internal_sink);
+    }
+    // Lo último es el nombre con que aparece en el mezclador; `-device`, la salida de PipeWire.
+    if (device.empty()) {
+        return {"-vn", "-ac", "2", "-f", "pulse", "Gallery"};
+    }
+    return {"-vn", "-ac", "2", "-f", "pulse", "-device", device, "Gallery"};
 }
 
 } // namespace platform
