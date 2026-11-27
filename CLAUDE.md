@@ -242,9 +242,6 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
 
 ## Pendiente
 
-- **Probar el HDMI con un cable y una pantalla de verdad** (Bruno lo hará más adelante): que
-  la imagen se vea (colores, encaje, sin tirones), el modo que coge con su EDID y desenchufar con
-  algo en marcha.
 - **Probar Cast en el Chromecast HD (Google TV) de la granja**: con el Nest Hub funciona todo,
   pero el Chromecast no se ha visto nunca encendido (Bruno lo probará allí).
 - **Probar en Samsung, Sony y Hisense** (teles de amigos de Bruno): están los arreglos
@@ -274,6 +271,8 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
     USB (Sennheiser «UC USB Headset»): «funciona»**. Sin probar: Bluetooth (está apagado por
     ZeroPower) y el volumen con un aparato elegido. Recordar: el USB-A sólo va con el interruptor
     en *Host*.
+  - **HDMI con una pantalla de verdad: Bruno lo probó el 27-nov-2026 con la 0.8.0, «ha
+    funcionado todo»** (foto, vídeo, sonido por la tele, A, pausa y saltos, desenchufar).
 
 - **0.7.1 (26-nov-2026)**: vídeo fluido en la pantalla del aparato y volumen. Bruno vio tirones
   en un vídeo de 25 fps; medido con ftrace y con contadores (`ZEROGALLERY_FPS_LOG=1` escribe
