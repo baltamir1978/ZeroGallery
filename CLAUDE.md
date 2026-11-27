@@ -273,6 +273,8 @@ Convenciones del aparato que la app respeta (documentadas en `CardputerZero/laun
     en *Host*.
   - **HDMI con una pantalla de verdad: Bruno lo probó el 27-nov-2026 con la 0.8.0, «ha
     funcionado todo»** (foto, vídeo, sonido por la tele, A, pausa y saltos, desenchufar).
+  - **Enviada a la tienda: [#967](https://github.com/CardputerZero/packages/pull/967)**
+    (descripción de la ficha con USB y Bluetooth).
 
 - **0.7.1 (26-nov-2026)**: vídeo fluido en la pantalla del aparato y volumen. Bruno vio tirones
   en un vídeo de 25 fps; medido con ftrace y con contadores (`ZEROGALLERY_FPS_LOG=1` escribe
